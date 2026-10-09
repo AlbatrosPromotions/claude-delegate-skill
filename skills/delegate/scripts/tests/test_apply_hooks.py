@@ -160,11 +160,11 @@ class ApplyHooksTest(unittest.TestCase):
     def test_the_shipped_rules_file_merges_into_the_default_settings_file(self):
         r = self.run_apply()  # no --settings: $CLAUDE_CONFIG_DIR/settings.json; no --rules: references/settings-hooks.json
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("added 3 hook group(s), 0 already present", r.stdout)
+        self.assertIn("added 4 hook group(s), 0 already present", r.stdout)
         with open(SHIPPED, encoding="utf-8") as f:
             shipped = json.load(f)
         self.assertEqual(self.read(), shipped)
-        self.assertEqual(sorted(shipped["hooks"]), ["PostToolUse", "SessionEnd", "UserPromptSubmit"])
+        self.assertEqual(sorted(shipped["hooks"]), ["PostToolUse", "SessionEnd", "SessionStart", "UserPromptSubmit"])
         for groups in shipped["hooks"].values():
             self.assertIn("skills/delegate/scripts/hooks.py", groups[0]["hooks"][0]["command"])
         self.assertEqual(shipped["hooks"]["PostToolUse"][0]["matcher"], "^Agent$")
