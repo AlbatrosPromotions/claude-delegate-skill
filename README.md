@@ -11,9 +11,9 @@ agents/                          sonnet-scout, sonnet-coder, sonnet-editor, haik
 skills/delegate/SKILL.md         qoidalar (~2k token, lead kontekstiga yuklanadi)
 skills/delegate/references/      costs.md (narxlar, o'lchovlar), enforcement.md + settings-deny.json (taqiq ro'yxati),
                                  brief-example.md (brief namunalari), lessons.md (retro tarixi)
-skills/delegate/scripts/         agent_cost.py (sessiya narxi, $), i18n_parity.py, i18n_diff.py,
-                                 apply_deny.py (deny ro'yxatini settings.json ga qo'shadi), publish.sh (Mac -> shu repo),
-                                 tests/ (unittest)
+skills/delegate/scripts/         agent_cost.py (sessiya narxi, $, limit kalibratsiyasi), i18n_parity.py, i18n_diff.py,
+                                 hooks.py (avtomatik o'lchov), apply_deny.py, apply_hooks.py (settings.json ga qo'shadi),
+                                 publish.sh (Mac -> shu repo), tests/ (unittest)
 skills/delegate-retro/SKILL.md   /delegate-retro
 CLAUDE.md.section                install.sh global CLAUDE.md ga qo'shadigan "Subagentlar" bo'limi
 install.sh                       serverda: ~/.claude ga o'rnatadi (idempotent, eski nusxani zaxiralaydi)
@@ -25,7 +25,7 @@ Talablar: Claude Code (`claude`), `git`, `python3` (3.8+). Repo private, shuning
 
 ```bash
 git clone git@github.com:AlbatrosPromotions/claude-delegate-skill.git ~/claude-delegate-skill
-bash ~/claude-delegate-skill/install.sh --deny
+bash ~/claude-delegate-skill/install.sh --deny --hooks
 ```
 
 Skript nima qiladi:
@@ -34,6 +34,7 @@ Skript nima qiladi:
 - `~/.claude/CLAUDE.md` ga "Subagentlar" bo'limini qo'shadi (bor bo'lsa tegmaydi);
 - skript testlarini ishga tushiradi;
 - `--deny` bilan: `references/settings-deny.json` dagi taqiq qoidalarini `~/.claude/settings.json` → `permissions.deny` ga qo'shadi (DB reset, force push, `git reset --hard`, `rm -rf ~` kabi buyruqlar; `references/enforcement.md`). Boshqa sozlamalarga tegmaydi.
+- `--hooks` bilan: `references/settings-hooks.json` dagi uchta hook'ni qo'shadi (`scripts/hooks.py`): SessionEnd har jiddiy sessiyani `~/.claude/delegate-metrics.tsv` ga loglaydi; PostToolUse(Agent) va UserPromptSubmit har subagent tugashi bilan uning narxini lead kontekstiga bir qator qilib beradi.
 - `settings.json` ning qolgan qismi, credentials, `projects/` o'zgarmaydi.
 
 Claude boshqa katalogdan config o'qisa: `CLAUDE_CONFIG_DIR=/path bash install.sh`.
@@ -78,4 +79,4 @@ Skill Max obuna limiti uchun sozlangan: limit API narxlariga taxminan proporsion
 ## Eslatmalar
 
 - Agentlarda interaktiv brauzer tool'i yo'q: UI skript (screenshot/regression) bilan tekshiriladi; bu eng katta token sarfi manbai edi.
-- Serverda `/usage` bilan limitni bosqich oldi va keyin tekshirib, raqamlarni retro'ga bering: bu limitning haqiqiy hisobi.
+- Bosqich oldi va keyin limitni o'qing (desktop: `get_usage` tool, terminal: `/usage`) va haftalik foizni handoff yozuviga qo'ying; retro ularni `--usage-before/--usage-after` bilan loglaydi va $ ↔ limit kursini (`limit calibration`) hisoblaydi.

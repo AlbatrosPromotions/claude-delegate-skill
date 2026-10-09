@@ -1,11 +1,14 @@
-"""Tests for agent_cost.py: row dedup, API-equivalent $, session selection, drift warning, metrics file."""
+"""Tests for agent_cost.py: row dedup, API-equivalent $, session selection, drift warning, metrics file, usage calibration,
+subagent lookup for the hooks."""
 import contextlib
 import io
 import json
+import calendar
 import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -76,9 +79,9 @@ def touch(path, mtime):
     return path
 
 
-def run_cli(*args):
+def run_cli(*args, **env):
     return subprocess.run([sys.executable, SCRIPT] + list(args), capture_output=True, encoding="utf-8",
-                          env=dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONDONTWRITEBYTECODE="1"))
+                          env=dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONDONTWRITEBYTECODE="1", **env))
 
 
 class AnalyzeTest(unittest.TestCase):
@@ -96,6 +99,18 @@ class AnalyzeTest(unittest.TestCase):
         self.assertEqual(a["output"], 60000)
         self.assertEqual(a["agent_calls"], 1)
         self.assertAlmostEqual(a["usd"], usd(agent_cost.PRICES["sonnet-5"], U1, U2, U3), places=9)
+
+    def test_avg_ctx_is_the_mean_context_per_call(self):
+        # input + cache write + cache read of each call: 401000, 450200, 450100
+        self.assertAlmostEqual(self.analyze(lead_rows())["avg_ctx"], (401000 + 450200 + 450100) / 3, places=6)
+        self.assertEqual(self.analyze([])["avg_ctx"], 0)  # no calls, no division by zero
+
+    def test_a_transcript_cut_in_the_middle_of_a_character_still_loads(self):
+        with tempfile.TemporaryDirectory() as d:  # the file is still being written: the last line stops after the first byte of a 2-byte letter
+            path = write(os.path.join(d, "lead.jsonl"), lead_rows())
+            with open(path, "ab") as f:
+                f.write(b'{"type": "user", "message": {"content": "\xd0')
+            self.assertEqual(agent_cost.analyze(path)["calls"], 3)
 
     def test_agent_calls_counts_spawns_that_started(self):
         rows = lead_rows() + [  # the Agent call in lead_rows counts; so does a Task call; a failed spawn and TaskCreate do not
@@ -193,6 +208,22 @@ class CliTest(unittest.TestCase):
         self.assertEqual(metrics_path(CLAUDE_CONFIG_DIR="/tmp/cfg"), "/tmp/cfg/delegate-metrics.tsv")
         self.assertEqual(metrics_path(), os.path.expanduser("~/.claude/delegate-metrics.tsv"))
 
+    def test_header_line_ends_with_the_average_context_per_call(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = run_cli(write(os.path.join(d, "s1.jsonl"), lead_rows()))
+        self.assertEqual(p.stdout.splitlines()[1],
+                         "  calls 3 | startup 401k | final context 480k | cache-read 850k | cache-write 450k | output 60k | ~$%.2f"
+                         " | avg ctx/call 434k" % usd(agent_cost.PRICES["sonnet-5"], U1, U2, U3))  # (401000 + 450200 + 450100) / 3
+
+    def test_hint_about_batching_for_a_session_with_more_than_150_calls(self):
+        def output(n):
+            with tempfile.TemporaryDirectory() as d:
+                return run_cli(write(os.path.join(d, "s1.jsonl"), [assistant("m%d" % i, [], usage(10, 0, 100000, 100)) for i in range(n)])).stdout
+
+        self.assertNotIn("lead calls at avg ctx", output(150))
+        self.assertIn("\nhint: 151 lead calls at avg ctx 100k: batch independent commands into one Bash call and make independent "
+                      "tool calls in parallel; every call re-sends the whole context.\n", output(151))
+
 
 class LogMetricsTest(unittest.TestCase):
     def setUp(self):
@@ -206,9 +237,9 @@ class LogMetricsTest(unittest.TestCase):
         self.subs_info = [({"agentType": "sonnet-scout"}, agent_cost.analyze(sub))]
         self.metrics = os.path.join(tmp.name, "delegate-metrics.tsv")  # never the real file
 
-    def log(self, lead=None):
+    def log(self, lead=None, **usage):
         with mock.patch.object(agent_cost, "METRICS", self.metrics), contextlib.redirect_stdout(io.StringIO()):
-            agent_cost.log_metrics(self.session, lead or self.lead, self.subs_info)
+            agent_cost.log_metrics(self.session, lead or self.lead, self.subs_info, **usage)
 
     def table(self):
         with open(self.metrics, encoding="utf-8") as f:
@@ -221,11 +252,12 @@ class LogMetricsTest(unittest.TestCase):
         header, rows = self.table()
         P = agent_cost.PRICES
         self.assertEqual(header, agent_cost.COLUMNS)
-        self.assertEqual(header[-2:], ["lead_usd", "sub_usd"])
+        self.assertEqual(header[-4:], ["lead_usd", "sub_usd", "usage_before", "usage_after"])
         self.assertEqual(len(rows), 1)
         self.assertEqual((rows[0]["session"], rows[0]["title"], rows[0]["subagents"]), ("abcdef12", "Stage 9 tests", "1"))
         self.assertEqual(rows[0]["lead_usd"], "%.2f" % usd(P["sonnet-5"], U1, U2, U3))
         self.assertEqual(rows[0]["sub_usd"], "%.2f" % usd(P["haiku"], U1))
+        self.assertEqual((rows[0]["usage_before"], rows[0]["usage_after"]), ("", ""))  # nobody gave them
 
     def test_a_file_with_the_old_header_is_rewritten_with_empty_usd_cells(self):
         with open(self.metrics, "w", encoding="utf-8") as f:
@@ -236,7 +268,7 @@ class LogMetricsTest(unittest.TestCase):
         self.assertEqual([r["session"] for r in rows], ["653ac61c", "abcdef12"])
         old = rows[0]
         self.assertEqual("\t".join(old[c] for c in header[:len(OLD_HEADER.split("\t"))]), OLD_ROW)
-        self.assertEqual((old["lead_usd"], old["sub_usd"]), ("", ""))
+        self.assertEqual((old["lead_usd"], old["sub_usd"], old["usage_before"], old["usage_after"]), ("", "", "", ""))
         self.assertNotEqual(rows[1]["lead_usd"], "")
 
     def test_logging_the_same_session_again_replaces_its_row(self):
@@ -245,6 +277,182 @@ class LogMetricsTest(unittest.TestCase):
         _header, rows = self.table()
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["lead_usd"], "99.00")
+
+    def usage_cells(self):
+        _header, rows = self.table()
+        self.assertEqual(len(rows), 1)
+        return rows[0]["usage_before"], rows[0]["usage_after"]
+
+    def test_usage_before_logged_first_and_after_logged_later_are_both_kept(self):
+        self.log(usage_before=30.0)  # at the start of the stage
+        self.assertEqual(self.usage_cells(), ("30", ""))
+        self.log(usage_after=42.5)  # at its end
+        self.assertEqual(self.usage_cells(), ("30", "42.5"))
+        self.log()  # a plain re-log, as the SessionEnd hook does, wipes nothing
+        self.assertEqual(self.usage_cells(), ("30", "42.5"))
+
+    def test_a_new_usage_value_overwrites_the_logged_one(self):
+        self.log(usage_before=30, usage_after=40)
+        self.log(usage_before=35.5)
+        self.assertEqual(self.usage_cells(), ("35.5", "40"))
+        self.log(usage_after=0)  # zero is a value, not "not given"
+        self.assertEqual(self.usage_cells(), ("35.5", "0"))
+
+    def test_other_sessions_rows_keep_their_usage_cells(self):
+        other = ["2026-10-07", "EDMS", "653ac61c", "Stage 5", "opus-5-5", "245", "564", "78.64", "5", "0", "32", "169.27", "9.50", "20.00",
+                 "61", "64"]
+        with open(self.metrics, "w", encoding="utf-8") as f:
+            f.write("\t".join(agent_cost.COLUMNS) + "\n" + "\t".join(other) + "\n")
+        self.log(usage_before=30)
+        _header, rows = self.table()
+        self.assertEqual([r["session"] for r in rows], ["653ac61c", "abcdef12"])
+        self.assertEqual((rows[0]["usage_before"], rows[0]["usage_after"]), ("61", "64"))
+        self.assertEqual((rows[1]["usage_before"], rows[1]["usage_after"]), ("30", ""))
+
+    def stamp(self, first_rows, mtime):
+        """Rewrite the session with these leading rows and set its mtime to a local noon on the given date (y, m, d)."""
+        write(self.session, first_rows + lead_rows())
+        stamp = time.mktime(mtime + (12, 0, 0, 0, 0, -1))
+        os.utime(self.session, (stamp, stamp))
+
+    def date(self):
+        self.log()
+        return self.table()[1][0]["date"]
+
+    def test_date_is_when_the_session_began_not_the_files_mtime(self):
+        self.stamp([{"type": "queue-operation", "timestamp": "2026-09-30T23:59:59.123Z"}], (2026, 10, 5))
+        # the row carries the LOCAL date of that UTC instant (east of UTC this is already 2026-10-01)
+        expected = time.strftime("%Y-%m-%d", time.localtime(calendar.timegm(time.strptime("2026-09-30T23:59:59", "%Y-%m-%dT%H:%M:%S"))))
+        self.assertEqual(self.date(), expected)
+
+    def test_date_comes_from_the_first_row_that_has_a_timestamp(self):
+        self.stamp([{"type": "summary", "summary": "no timestamp here"}, {"type": "user", "timestamp": "2026-09-29T08:00:00Z"},
+                    {"type": "user", "timestamp": "2026-10-01T08:00:00Z"}], (2026, 10, 5))
+        self.assertEqual(self.date(), "2026-09-29")
+
+    def test_date_falls_back_to_the_mtime_without_a_usable_timestamp(self):
+        self.stamp([{"type": "user", "timestamp": "yesterday"}, {"type": "user", "timestamp": 1760000000}], (2026, 10, 5))
+        self.assertEqual(self.date(), "2026-10-05")
+
+    def test_the_file_is_replaced_not_left_with_temp_files_and_a_symlink_stays_a_symlink(self):
+        real = os.path.join(os.path.dirname(self.metrics), "elsewhere", "real.tsv")
+        os.makedirs(os.path.dirname(real))
+        os.symlink(real, self.metrics)
+        self.log(usage_before=30)
+        self.assertTrue(os.path.islink(self.metrics))
+        self.assertEqual(self.usage_cells(), ("30", ""))
+        for d in (os.path.dirname(self.metrics), os.path.dirname(real)):
+            self.assertFalse([n for n in os.listdir(d) if n.endswith(".tmp")], d)
+
+
+class CalibrationTest(unittest.TestCase):
+    """--usage-before / --usage-after through the command line: the limit calibration line and the metrics file."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = tmp.name  # CLAUDE_CONFIG_DIR: the metrics file is never the real one
+        self.session = write(os.path.join(self.dir, "Projects-Demo", "abcdef12-0000.jsonl"), lead_rows())  # $1.8976 in all
+        self.metrics = os.path.join(self.dir, "delegate-metrics.tsv")
+
+    def run_cli(self, *args):
+        p = run_cli(self.session, *args, CLAUDE_CONFIG_DIR=self.dir)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        return p
+
+    def usage_cells(self):
+        with open(self.metrics, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+        row = dict(zip(lines[0].split("\t"), lines[1].split("\t")))
+        return row["usage_before"], row["usage_after"]
+
+    def test_calibration_line(self):
+        p = self.run_cli("--usage-before", "10", "--usage-after", "14.5")
+        self.assertIn("\nlimit calibration: +4.5% of the weekly allowance for $1.90 total -> 2.37 %/$ (about $0.42 per 1%)\n", p.stdout)
+        self.assertIn("stored only with --log", p.stderr)  # without --log nothing is written
+        self.assertFalse(os.path.exists(self.metrics))
+
+    def test_the_total_includes_the_subagents(self):
+        write(os.path.join(self.dir, "Projects-Demo", "abcdef12-0000", "subagents", "agent-a1.jsonl"), [assistant("m1", [], U1, HAIKU)])
+        p = self.run_cli("--usage-before", "10", "--usage-after", "14.5")  # lead $1.8976 + subagent $0.601
+        self.assertIn("for $2.50 total -> 1.8 %/$ (about $0.56 per 1%)", p.stdout)
+
+    def test_no_line_without_both_values_or_when_the_allowance_did_not_grow(self):
+        for args in ((), ("--usage-before", "10"), ("--usage-after", "14.5"), ("--usage-before", "14.5", "--usage-after", "10"),
+                     ("--usage-before", "10", "--usage-after", "10")):
+            self.assertNotIn("limit calibration", self.run_cli(*args).stdout, args)
+
+    def test_no_line_when_nothing_was_spent(self):
+        write(self.session, [assistant("m1", [], usage(0, 0, 0, 0), "<synthetic>")])
+        self.assertNotIn("limit calibration", self.run_cli("--usage-before", "10", "--usage-after", "12").stdout)
+
+    def test_values_are_percentages(self):
+        self.assertIn("+4.5% of", self.run_cli("--usage-before", "10%", "--usage-after", "14.5%").stdout)
+        for bad in ("abc", "-1", "101", "nan"):
+            p = run_cli(self.session, "--usage-before", bad, CLAUDE_CONFIG_DIR=self.dir)
+            self.assertEqual(p.returncode, 2, bad)
+            self.assertIn("not a percentage", p.stderr)
+
+    def test_before_at_the_start_of_a_stage_and_after_at_its_end(self):
+        first = self.run_cli("--log", "--usage-before", "30")
+        self.assertNotIn("limit calibration", first.stdout)
+        self.assertEqual(self.usage_cells(), ("30", ""))
+        second = self.run_cli("--log", "--usage-after", "38%")  # the logged 'before' completes the pair
+        self.assertIn("limit calibration: +8% of the weekly allowance for $1.90 total -> 4.22 %/$ (about $0.24 per 1%)", second.stdout)
+        self.assertEqual(self.usage_cells(), ("30", "38"))
+        third = self.run_cli("--log")  # a plain re-log keeps both and still reports the calibration
+        self.assertIn("limit calibration: +8% of", third.stdout)
+        self.assertEqual(self.usage_cells(), ("30", "38"))
+        fourth = self.run_cli("--log", "--usage-before", "31")  # a new value overwrites
+        self.assertIn("limit calibration: +7% of the weekly allowance for $1.90 total -> 3.69 %/$ (about $0.27 per 1%)", fourth.stdout)
+        self.assertEqual(self.usage_cells(), ("31", "38"))
+
+
+class SubagentHelpersTest(unittest.TestCase):
+    """find_subagent and summarize_agent: what the hooks use to put a subagent's cost into the lead's context."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.session = write(os.path.join(tmp.name, "abcdef12-0000.jsonl"), lead_rows())
+        self.sub_dir = os.path.join(tmp.name, "abcdef12-0000", "subagents")
+        self.a = write(os.path.join(self.sub_dir, "agent-aaa.jsonl"), [assistant("m1", [], U1, HAIKU), assistant("m2", [], U2, HAIKU)])
+        self.meta = {"agentType": "sonnet-scout", "description": "scan the repo", "toolUseId": "toolu_A"}
+        write(os.path.join(self.sub_dir, "agent-aaa.meta.json"), [self.meta])
+        self.b = write(os.path.join(self.sub_dir, "agent-bbb.jsonl"), [assistant("m3", [], U3, HAIKU)])  # no meta.json
+
+    def test_found_by_the_tool_use_id_in_the_meta(self):
+        self.assertEqual(agent_cost.find_subagent(self.session, tool_use_id="toolu_A"), (self.meta, self.a))
+
+    def test_found_by_the_agent_id_even_without_a_meta(self):
+        self.assertEqual(agent_cost.find_subagent(self.session, agent_id="bbb"), ({}, self.b))
+        self.assertEqual(agent_cost.find_subagent(self.session, agent_id="aaa"), (self.meta, self.a))
+
+    def test_the_tool_use_id_wins_over_the_agent_id_and_the_agent_id_is_the_fallback(self):
+        self.assertEqual(agent_cost.find_subagent(self.session, tool_use_id="toolu_A", agent_id="bbb"), (self.meta, self.a))
+        self.assertEqual(agent_cost.find_subagent(self.session, tool_use_id="toolu_unknown", agent_id="bbb"), ({}, self.b))
+
+    def test_nothing_found(self):
+        self.assertEqual(agent_cost.find_subagent(self.session, tool_use_id="toolu_unknown"), (None, None))
+        self.assertEqual(agent_cost.find_subagent(self.session, agent_id="zzz"), (None, None))
+        self.assertEqual(agent_cost.find_subagent(self.session), (None, None))
+        self.assertEqual(agent_cost.find_subagent(os.path.join(os.path.dirname(self.session), "other.jsonl"), tool_use_id="toolu_A"),
+                         (None, None))  # a session without a subagents directory
+
+    def test_an_agent_id_cannot_leave_the_subagents_directory(self):
+        write(os.path.join(self.sub_dir, "agent-q", "z.jsonl"), [assistant("m4", [], U1)])  # reachable as agent-<q/z>.jsonl
+        self.assertEqual(agent_cost.find_subagent(self.session, agent_id="q/z"), (None, None))
+
+    def test_summary_line(self):
+        P = agent_cost.PRICES
+        line = agent_cost.summarize_agent(dict(self.meta, description="x" * 50 + "\nsecond line"), self.a, self.session)
+        self.assertEqual(line, 'delegate-cost: sonnet-scout "%s": ~$%.2f, 2 calls, final ctx 460k, cache-read 400k (haiku-4-5-20251001). '
+                               "Lead so far: ~$%.2f, 3 calls, ctx 480k." % ("x" * 40, usd(P["haiku"], U1, U2), usd(P["sonnet-5"], U1, U2, U3)))
+
+    def test_summary_line_without_a_readable_lead_transcript_or_a_meta(self):
+        line = agent_cost.summarize_agent({}, self.a, os.path.join(os.path.dirname(self.session), "missing.jsonl"))
+        self.assertEqual(line, 'delegate-cost: ? "": ~$%.2f, 2 calls, final ctx 460k, cache-read 400k (haiku-4-5-20251001).'
+                         % usd(agent_cost.PRICES["haiku"], U1, U2))
 
 
 if __name__ == "__main__":

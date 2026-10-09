@@ -3,10 +3,12 @@
 # shu repo'dan Claude Code config katalogiga (~/.claude) o'rnatadi.
 #
 #   git clone git@github.com:AlbatrosPromotions/claude-delegate-skill.git ~/claude-delegate-skill
-#   bash ~/claude-delegate-skill/install.sh [--deny]
+#   bash ~/claude-delegate-skill/install.sh [--deny] [--hooks]
 #
-# --deny : references/settings-deny.json dagi taqiq qoidalarini ~/.claude/settings.json ga qo'shadi
-#          (ma'lumotni yo'q qiluvchi buyruqlar: DB reset, force push, git reset --hard ...).
+# --deny  : references/settings-deny.json dagi taqiq qoidalarini ~/.claude/settings.json ga qo'shadi
+#           (ma'lumotni yo'q qiluvchi buyruqlar: DB reset, force push, git reset --hard ...).
+# --hooks : references/settings-hooks.json dagi o'lchov hook'larini qo'shadi (har sessiya narxini avtomatik
+#           loglaydi, har subagent narxini lead'ga ko'rsatadi).
 # Yangilash:  git -C ~/claude-delegate-skill pull && bash ~/claude-delegate-skill/install.sh
 # Claude boshqa katalogdan config o'qisa:  CLAUDE_CONFIG_DIR=/path bash install.sh
 set -euo pipefail
@@ -14,10 +16,12 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 APPLY_DENY=0
+APPLY_HOOKS=0
 for arg in "$@"; do
   case "$arg" in
     --deny) APPLY_DENY=1 ;;
-    -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
+    --hooks) APPLY_HOOKS=1 ;;
+    -h|--help) sed -n '2,14p' "$0"; exit 0 ;;
     *) echo "noma'lum parametr: $arg" >&2; exit 1 ;;
   esac
 done
@@ -82,6 +86,12 @@ if command -v python3 >/dev/null 2>&1; then
     python3 "$CLAUDE_DIR/skills/delegate/scripts/apply_deny.py" --settings "$CLAUDE_DIR/settings.json"
   else
     echo "    taqiq qoidalari qo'shilmadi; ko'rish: python3 $CLAUDE_DIR/skills/delegate/scripts/apply_deny.py --dry-run  (yoki install.sh --deny)"
+  fi
+  if [ "$APPLY_HOOKS" = 1 ]; then
+    echo "==> o'lchov hook'lari qo'shilmoqda"
+    python3 "$CLAUDE_DIR/skills/delegate/scripts/apply_hooks.py" --settings "$CLAUDE_DIR/settings.json"
+  else
+    echo "    hook'lar qo'shilmadi; ko'rish: python3 $CLAUDE_DIR/skills/delegate/scripts/apply_hooks.py --dry-run  (yoki install.sh --hooks)"
   fi
 else
   echo "    OGOHLANTIRISH: python3 topilmadi: skill matni ishlaydi, lekin scripts/*.py (parity, agent_cost, apply_deny) ishlamaydi"

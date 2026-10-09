@@ -4,7 +4,7 @@ Not loaded automatically. `SKILL.md` keeps the rules; this file keeps the number
 
 ## The budget is a subscription limit
 
-The user works on a Claude Max subscription, not on API billing. The limit (a 5-hour window and a weekly allowance, shown by `/usage`) is consumed roughly in proportion to API list prices, so the API-equivalent $ printed by `scripts/agent_cost.py` is the best available proxy. Anthropic does not publish the exact formula: when the numbers matter, compare `/usage` before and after a stage and log both in `references/lessons.md`.
+The user works on a Claude Max subscription, not on API billing. The limit (a 5-hour window and a weekly allowance, shown by `/usage`) is consumed roughly in proportion to API list prices, so the API-equivalent $ printed by `scripts/agent_cost.py` is the best available proxy. Anthropic does not publish the exact formula, so the metrics file keeps the weekly all-models % before and after each stage (`usage_before`, `usage_after`) and `agent_cost.py` prints the resulting `limit calibration` (%/$). Several stages of that line are the real exchange rate; until then the $ figures are relative, not absolute. The desktop app exposes the limits to the lead as the `get_usage` tool (5-hour window, weekly all models, weekly per model); the terminal shows them with `/usage`.
 
 ## API list prices used by agent_cost.py ($ per million tokens, 2026-10-06)
 
@@ -18,7 +18,8 @@ The user works on a Claude Max subscription, not on API billing. The limit (a 5-
 | Haiku 5.5 | 0.10 | 0.125 | 0.01 | 0.50 |
 
 What follows from the table:
-- Output costs 5× input on every model. Thinking is output, so effort levels change the output share, but in a long worker run output is a small share of the total (EDMS stage 8 lead: 129k output ≈ $2.6 against 49.5M cache reads ≈ $9.9).
+- Output costs 5× input on every model. Thinking is output, and in a long run output is a small share of the total (EDMS stage 8 lead: 129k output ≈ $2.6 against 49.5M cache reads ≈ $9.9). Effort is not only thinking, though: lower effort also means fewer, more consolidated tool calls, higher effort more exploration and verification calls, and calls × context is the biggest line. So an effort change must be judged by total $ and defects per stage, never by output tokens alone.
+- Effort policy (decided 2026-10-09): coder and editor `max` (they write the deliverable, rework is dear), scout `high`, tester default. Lead `max` for the next stage as the quality baseline (`modelSettings.claude-opus-5-5.effortLevel` in `~/.claude/settings.json`), then one comparable stage at `xhigh`; compare total $, lead calls and defects, and keep `xhigh` only if defects are equal. Anthropic's guidance: `xhigh` is the sweet spot for coding and agentic work; `max` earns its cost only where measurement shows headroom.
 - A cache read costs 2.5–10% of a fresh input token, so re-sending context is cheaper than it looks; at 400k context × 200 calls it is still the biggest line.
 - Sonnet 5.5 and Opus 5.5 have the same cache-read price. Moving long-context work to Sonnet halves fresh input and output, not re-reads. The real savings come from smaller contexts and shorter runs on any model, and from Haiku for mechanical checks.
 - A lead on Fable pays 2.5× Opus 5.5 for every token: use it for the plan and the review, not for bulk reading.

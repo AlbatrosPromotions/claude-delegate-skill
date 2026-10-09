@@ -11,9 +11,8 @@ Goal: make `delegate` and the agents cheaper over time without ever making the r
 ## 1. Measure
 
 - Pick the session the user names (an id prefix, or a title to match against `<session>/custom-title.json`). Otherwise use `--previous`: the newest session of the current project is this retro itself, so the stage is the one before it. Project dir: `~/.claude/projects/<cwd with every / replaced by ->`.
-- Run `python3 ~/.claude/skills/delegate/scripts/agent_cost.py <session.jsonl or project dir> [--previous] --reports --log`. Heed its warnings (unknown model price, transcript layout drift).
-- Compare against earlier rows of `~/.claude/delegate-metrics.tsv` (same project first): lead $ and subagent $ per stage, the lead's final context, the number of `general-purpose`/`Explore` spawns, average subagent startup. Note the stage's scope so a bigger stage isn't read as a regression.
-- If the user shares `/usage` percentages from before and after the stage, log them in the lesson: they are the ground truth for what the limit really charged.
+- Ask the user for the weekly all-models usage % before and after the stage (from the handoff note, the desktop usage card or `/usage`), then run `python3 ~/.claude/skills/delegate/scripts/agent_cost.py <session.jsonl or project dir> [--previous] --reports --log --usage-before N --usage-after M`. The session is usually already logged by the SessionEnd hook; `--log` updates its row. Heed the warnings (unknown model price, transcript layout drift) and the `limit calibration` line: it is the real exchange rate between $ and the limit.
+- Compare against earlier rows of `~/.claude/delegate-metrics.tsv` (same project first): lead $ and subagent $ per stage, lead calls and avg context per call, the lead's final context, the number of `general-purpose`/`Explore` spawns, average subagent startup, and %/$ calibration. Note the stage's scope so a bigger stage isn't read as a regression.
 
 ## 2. Review quality (this matters most)
 
@@ -27,7 +26,7 @@ Name each problem with evidence (session, agent, what happened). Don't report a 
 
 ## 3. Log the lesson
 
-Append to `~/.claude/skills/delegate/references/lessons.md`: `## <date> <project> <session> "<title>"`, then 2–6 bullets covering the numbers that moved ($ first), what worked, what failed (with evidence) and the change you propose.
+Append to `~/.claude/skills/delegate/references/lessons.md`: `## <date> <project> <session> "<title>" (lead <model> effort <level>)`, then 2–6 bullets covering the numbers that moved ($ first), what worked, what failed (with evidence) and the change you propose.
 
 ## 4. Propose changes; the user approves
 
@@ -47,4 +46,4 @@ If a change made results worse, revert it (`git -C ~/.claude revert <commit>`) a
 - Never remove or weaken verification steps, parity checks or review gates to save tokens.
 - Keep `delegate/SKILL.md` under ~2k tokens (about 7k characters of English), because it is loaded into the lead's context. Move detail to `references/`.
 - Change numbers in `SKILL.md` and `references/costs.md` (thresholds, costs, prices) only from measurements, and date them.
-- Lower an effort or pick a cheaper model only with at least two stages of evidence that quality held. Effort mostly changes output tokens, a small share of a long worker's cost; shorter runs and smaller contexts save more.
+- Lower an effort or pick a cheaper model only with at least two stages of evidence that quality held. Effort changes thinking and the number of tool calls, so judge it by total $ and defects per stage; shorter runs and smaller contexts save more than effort tweaks.

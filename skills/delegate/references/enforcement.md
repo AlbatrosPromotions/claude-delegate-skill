@@ -17,6 +17,13 @@ How deny rules behave (Claude Code docs, 2026-10):
 
 What the list covers: Laravel, Prisma, Rails and Django database resets, `dropdb`, docker volume removal, `git push --force`, `git reset --hard`, destructive `git clean`, and `rm -rf` of `/` or the home directory. Add project-specific rules to the project's `.claude/settings.json` under the same key; deny rules from every scope combine. To allow one of them again, remove the line from `~/.claude/settings.json` and run the command yourself in a terminal.
 
+## Measurement hooks
+
+`settings-hooks.json` next to this file installs three hooks that all run `scripts/hooks.py` (stdlib Python, no network, exit 0 always); apply with `python3 ~/.claude/skills/delegate/scripts/apply_hooks.py [--dry-run]`:
+- `SessionEnd`: logs the session to `~/.claude/delegate-metrics.tsv` when it had ≥ 30 calls or any subagent, so the metrics fill without anyone remembering.
+- `PostToolUse` on `Agent` and `UserPromptSubmit` (which carries a background subagent's hand-back): add one `delegate-cost:` line to the lead's context with that subagent's $, calls and final context, plus the lead's running total. The lead sees what each delegation cost while it can still size the next brief.
+Hooks cannot read the plan limits; the lead reads them (desktop `get_usage` tool or `/usage`) and the retro logs them.
+
 ## Other harness-level rules
 
 - Tool allowlists in `~/.claude/agents/*.md`: the scout has no shell and no write tool; no agent has the interactive browser (UI is verified by scripts).
