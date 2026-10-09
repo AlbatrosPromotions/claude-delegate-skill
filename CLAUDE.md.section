@@ -1,0 +1,3 @@
+# Subagentlar
+- Subagent yaratishdan yoki ishni bo'laklarga bo'lishdan oldin `delegate` skill'ini yukla (kimga nima, brief shabloni, tekshiruv).
+- Oddiy ishga `general-purpose` emas: `sonnet-scout` (faktlar), `sonnet-coder` (kod), `sonnet-editor` (matn/tarjima), `haiku-tester` (QA). Sifat birinchi o'rinda: natijani diff va skriptlar bilan tekshirmasdan qabul qilma.

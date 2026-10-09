@@ -1,0 +1,6 @@
+date	project	session	title	lead_model	lead_calls	lead_final_k	lead_cache_read_M	subagents	general_purpose	sub_startup_avg_k	sub_cache_read_M
+2026-10-07	EDMS	06d883d0	Build the document page (design stage 4)	opus-5-5	350	782	164.59	2	2	65	2.84
+2026-10-07	EDMS	653ac61c	Document design stage 5: journals and forms	opus-5-5	245	564	78.64	5	0	32	169.27
+2026-10-07	EDMS	923c2081	Document design stage 6: reference books	opus-5-5	200	460	51.96	8	0	25	115.98
+2026-10-08	EDMS	4a12cfb8	Document design stage 7: files	opus-5-5	185	418	44.29	7	0	26	78.14
+2026-10-08	EDMS	aef3f855	Start document design stage 8 (statistics + user page)	opus-5-5	203	447	49.46	7	0	28	96.3
