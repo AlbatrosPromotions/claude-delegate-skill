@@ -12,7 +12,7 @@ Goal: make `delegate` and the agents cheaper over time without ever making the r
 
 - Pick the session the user names (an id prefix, or a title to match against `<session>/custom-title.json`). Otherwise use `--previous`: the newest session of the current project is this retro itself, so the stage is the one before it. Project dir: `~/.claude/projects/<cwd with every / replaced by ->`.
 - Ask the user for the weekly all-models usage % before and after the stage (from the handoff note, the desktop usage card or `/usage`), then run `python3 ~/.claude/skills/delegate/scripts/agent_cost.py <session.jsonl or project dir> [--previous] --reports --log --usage-before N --usage-after M`. The session is usually already logged by the SessionEnd hook; `--log` updates its row. Heed the warnings (unknown model price, transcript layout drift) and the `limit calibration` line: it is the real exchange rate between $ and the limit.
-- Compare against earlier rows of `~/.claude/delegate-metrics.tsv` (same project first): lead $ and subagent $ per stage, lead calls and avg context per call, the lead's final context, the number of `general-purpose`/`Explore` spawns, average subagent startup, and %/$ calibration. Note the stage's scope so a bigger stage isn't read as a regression.
+- Compare with `python3 ~/.claude/skills/delegate/scripts/agent_cost.py --table <project>` (the rows of `~/.claude/delegate-metrics.tsv`, same project first): lead $ and subagent $ per stage, lead calls and avg context per call, the lead's final context, the number of `general-purpose`/`Explore` spawns, average subagent startup, and %/$ calibration. Note the stage's scope so a bigger stage isn't read as a regression.
 
 ## 2. Review quality (this matters most)
 

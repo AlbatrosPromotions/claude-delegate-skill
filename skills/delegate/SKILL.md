@@ -67,6 +67,6 @@ Hand over the facts you have (line numbers, names, glossary); give paths and ran
 ## Enforcement and measurement
 
 - A prompt rule is a request, not a guardrail: `references/enforcement.md` has the deny list (data-destroying commands, force pushes) and the hooks; the agents have tool allowlists and turn caps.
-- Hooks log every substantial session to `~/.claude/delegate-metrics.tsv` and show each subagent's cost right after its hand-back (`delegate-cost:` lines); `scripts/agent_cost.py <session.jsonl | project dir> [--previous] [--reports]` prints the same per agent (calls, avg context per call, cache-read, $).
+- Hooks log every substantial session to `~/.claude/delegate-metrics.tsv` and show each subagent's cost right after its hand-back (`delegate-cost:` lines); `scripts/agent_cost.py --table [project]` (also kept in `~/.claude/delegate-report.txt`) compares the stages; `agent_cost.py <session.jsonl | project dir> [--previous] [--reports]` details one session.
 - Read the plan limits at the start and end of a stage (desktop: `get_usage` tool; terminal: `/usage`) and note the weekly all-models % in the handoff note; the retro logs both and calibrates $ against the limit. When the weekly allowance is low, run Sonnet-only work and keep the lead for review.
 - After a stage, the user runs `/delegate-retro`: it measures, reviews quality, logs a lesson in `references/lessons.md`, and proposes evidence-based edits to this skill and the agents.

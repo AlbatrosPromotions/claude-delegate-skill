@@ -19,8 +19,9 @@ What the list covers: Laravel, Prisma, Rails and Django database resets, `dropdb
 
 ## Measurement hooks
 
-`settings-hooks.json` next to this file installs three hooks that all run `scripts/hooks.py` (stdlib Python, no network, exit 0 always); apply with `python3 ~/.claude/skills/delegate/scripts/apply_hooks.py [--dry-run]`:
-- `SessionEnd`: logs the session to `~/.claude/delegate-metrics.tsv` when it had ≥ 30 calls or any subagent, so the metrics fill without anyone remembering.
+`settings-hooks.json` next to this file installs four hooks that all run `scripts/hooks.py` (stdlib Python, no network, exit 0 always); apply with `python3 ~/.claude/skills/delegate/scripts/apply_hooks.py [--dry-run]`:
+- `SessionStart` (startup only): one reminder line for the lead to read the plan limits at the start and before the final message, so no special prompt is needed.
+- `SessionEnd`: logs the session to `~/.claude/delegate-metrics.tsv` when it had ≥ 30 calls or any subagent, and rewrites `~/.claude/delegate-report.txt`, the stage comparison table (same as `agent_cost.py --table [project]`), so the result of the measurement is readable at any time without a Claude session.
 - `PostToolUse` on `Agent` and `UserPromptSubmit` (which carries a background subagent's hand-back): add one `delegate-cost:` line to the lead's context with that subagent's $, calls and final context, plus the lead's running total. The lead sees what each delegation cost while it can still size the next brief.
 Hooks cannot read the plan limits; the lead reads them (desktop `get_usage` tool or `/usage`) and the retro logs them.
 

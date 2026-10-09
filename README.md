@@ -34,7 +34,7 @@ Skript nima qiladi:
 - `~/.claude/CLAUDE.md` ga "Subagentlar" bo'limini qo'shadi (bor bo'lsa tegmaydi);
 - skript testlarini ishga tushiradi;
 - `--deny` bilan: `references/settings-deny.json` dagi taqiq qoidalarini `~/.claude/settings.json` → `permissions.deny` ga qo'shadi (DB reset, force push, `git reset --hard`, `rm -rf ~` kabi buyruqlar; `references/enforcement.md`). Boshqa sozlamalarga tegmaydi.
-- `--hooks` bilan: `references/settings-hooks.json` dagi uchta hook'ni qo'shadi (`scripts/hooks.py`): SessionEnd har jiddiy sessiyani `~/.claude/delegate-metrics.tsv` ga loglaydi; PostToolUse(Agent) va UserPromptSubmit har subagent tugashi bilan uning narxini lead kontekstiga bir qator qilib beradi.
+- `--hooks` bilan: `references/settings-hooks.json` dagi to'rtta hook'ni qo'shadi (`scripts/hooks.py`): SessionStart lead'ga limitni o'qishni eslatadi; SessionEnd har jiddiy sessiyani `~/.claude/delegate-metrics.tsv` ga loglaydi va `~/.claude/delegate-report.txt` (bosqichlar solishtiruv jadvali, `agent_cost.py --table` bilan bir xil) ni yangilaydi; PostToolUse(Agent) va UserPromptSubmit har subagent tugashi bilan uning narxini lead kontekstiga bir qator qilib beradi.
 - `settings.json` ning qolgan qismi, credentials, `projects/` o'zgarmaydi.
 
 Claude boshqa katalogdan config o'qisa: `CLAUDE_CONFIG_DIR=/path bash install.sh`.

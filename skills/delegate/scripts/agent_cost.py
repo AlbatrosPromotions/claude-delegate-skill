@@ -342,6 +342,45 @@ def calibration(usage_before, usage_after, total_usd):
         used, total_usd, used / total_usd, total_usd / used)
 
 
+def stage_table(rows, project=None):
+    """The logged sessions as a comparison table: $ per stage, the change against the previous priced row, and the
+    limit calibration (%/$) where usage before and after were logged. project filters the rows (None: every project)."""
+    rows = [r for r in rows if not project or r.get("project") == project]
+    if not rows:
+        return "no logged sessions" + (" for project %s" % project if project else "")
+    head = "%-10s %-8s %-9s %-40s %5s %6s %7s %7s %7s %5s %6s  %s" % (
+        "date", "session", "project", "title", "calls", "ctx k", "lead $", "subs $", "total $", "chg", "%/$", "usage")
+    lines, prev = [head], None
+    for r in rows:
+        try:
+            lead_usd, sub_usd = float(r.get("lead_usd") or 0), float(r.get("sub_usd") or 0)
+        except ValueError:
+            lead_usd = sub_usd = 0.0
+        total = lead_usd + sub_usd
+        change = "%+.0f%%" % ((total - prev) / prev * 100) if prev and total else ""
+        before, after = r.get("usage_before", ""), r.get("usage_after", "")
+        try:
+            rate = "%.3g" % ((float(after) - float(before)) / total) if before and after and total else ""
+        except (ValueError, ZeroDivisionError):
+            rate = ""
+        usage = "%s->%s" % (before, after) if before or after else ""
+        lines.append("%-10s %-8s %-9s %-40s %5s %6s %7.2f %7.2f %7.2f %5s %6s  %s" % (
+            r.get("date", ""), r.get("session", ""), r.get("project", "")[:9], r.get("title", "")[:40], r.get("lead_calls", ""),
+            r.get("lead_final_k", ""), lead_usd, sub_usd, total, change, rate, usage))
+        if total:
+            prev = total
+    return "\n".join(lines)
+
+
+def write_report(project=None):
+    """Keep delegate-report.txt (next to the metrics file) as the current stage table; returns its path."""
+    path = os.path.join(os.path.dirname(METRICS), "delegate-report.txt")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("delegate report, updated %s%s\n\n%s\n" % (
+            time.strftime("%Y-%m-%d %H:%M"), " (project %s)" % project if project else "", stage_table(read_metrics(), project)))
+    return path
+
+
 def pct(s):
     """argparse type: a percentage such as 45, 45.5 or 45%."""
     try:
@@ -396,7 +435,9 @@ def log_metrics(session, lead, subs_info, usage_before=None, usage_after=None, q
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("path")
+    ap.add_argument("path", nargs="?", help="session .jsonl, session dir or project dir (not needed with --table)")
+    ap.add_argument("--table", nargs="?", const="", metavar="PROJECT",
+                    help="print the comparison table of logged stages (optionally one project) and exit; the SessionEnd hook keeps the same table in delegate-report.txt")
     ap.add_argument("--previous", action="store_true",
                     help="for a project directory: the second-newest session (the newest is the one running the retro)")
     ap.add_argument("--top", type=int, default=5, help="costliest tool outputs to list per session (default 5)")
@@ -408,6 +449,11 @@ def main():
     ap.add_argument("--usage-after", type=pct, metavar="PCT",
                     help="the same after the stage; with both known, a limit calibration line (%%/$) is printed")
     args = ap.parse_args()
+    if args.table is not None:
+        print(stage_table(read_metrics(), args.table or None))
+        return
+    if not args.path:
+        ap.error("path is required (or use --table)")
     if (args.usage_before is not None or args.usage_after is not None) and not args.log:
         print("note: --usage-before/--usage-after are stored only with --log", file=sys.stderr)
 

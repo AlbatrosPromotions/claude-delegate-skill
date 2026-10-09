@@ -4,7 +4,9 @@
 One script serves three events (references/settings-hooks.json has the config, apply_hooks.py installs it). The event is
 one JSON object on stdin; the only thing ever written to stdout is one JSON object with "additionalContext":
 
-  SessionEnd        a session with >= 30 lead calls or any subagent is logged to delegate-metrics.tsv, as `agent_cost.py --log` does
+  SessionStart      (matcher startup) one reminder line for the lead: read the usage limit now and before the final message
+  SessionEnd        a session with >= 30 lead calls or any subagent is logged to delegate-metrics.tsv, as `agent_cost.py --log` does,
+                    and delegate-report.txt (the stage comparison table) is refreshed
   PostToolUse       (matcher ^Agent$) a foreground subagent handed back: one "delegate-cost:" line for the lead
   UserPromptSubmit  a background subagent's <task-notification> arrived: the same line; any other prompt: nothing, at once
 
@@ -40,6 +42,17 @@ def agent_line(event, tool_use_id=None, agent_id=None):
     return agent_cost.summarize_agent(meta, transcript, session, a) if a["calls"] >= MIN_AGENT_CALLS else None
 
 
+REMINDER = ("delegate: costs are logged automatically. If this session is a work stage (it will spawn subagents or run more than "
+            "~30 calls), read the plan limits now (desktop: the get_usage tool; terminal: /usage) and note the weekly all-models %; "
+            "read them again right before your final message and put both in the handoff note as usage before/after. "
+            "Afterwards the user runs /delegate-retro in a new session.")
+
+
+def session_start(event):
+    if event.get("source") in ("startup", "clear"):  # not on resume or compact (the lead already has the note), nor without a source
+        return REMINDER
+
+
 def session_end(event):
     import agent_cost
     session = session_of(event)
@@ -47,6 +60,7 @@ def session_end(event):
     subs = agent_cost.subagent_files(session)
     if lead["calls"] >= MIN_LEAD_CALLS or subs:
         agent_cost.log_metrics(session, lead, [(agent_cost.read_meta(p), agent_cost.analyze(p)) for p in subs], quiet=True)
+        agent_cost.write_report(agent_cost.project_name(session))
 
 
 def post_tool_use(event):
@@ -63,7 +77,7 @@ def user_prompt_submit(event):
         return agent_line(event, tool_use_id and tool_use_id.group(1), task_id and task_id.group(1))
 
 
-HANDLERS = {"SessionEnd": session_end, "PostToolUse": post_tool_use, "UserPromptSubmit": user_prompt_submit}
+HANDLERS = {"SessionStart": session_start, "SessionEnd": session_end, "PostToolUse": post_tool_use, "UserPromptSubmit": user_prompt_submit}
 
 
 def main():
