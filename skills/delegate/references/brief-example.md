@@ -41,3 +41,35 @@ Why it works:
 - Each unit (slug) is edited in all three languages at once, so the versions stay consistent.
 - The acceptance checks are deterministic and cheap. The parity check only reports what changed relative to the baseline, and the word diff shows only changed lines.
 - The lead then reviews `git diff -U1` of the changed hunks (a few thousand tokens), not 36 whole files.
+
+# Brief skeletons for the other agents
+
+## sonnet-coder (one unit of work)
+
+```
+GOAL      Add the «Xodimlar holati» page: backend endpoint + Vue page + tests, per the plan.
+WHERE     Worktree <abs path>. Edit: api/app/Http/Controllers/StaffStatusController.php (new),
+          front/pages/staff-status.vue (new), front/i18n/locales/{uz,ru,en}.json (keys staff.*).
+          Shared code already built and linted by the lead: front/utils/staffStatus.ts:1-80 (use it, don't change it).
+          Do NOT touch: components/custom/document-row.vue, anything under database/migrations.
+CONTEXT   Decision: counts come from the users table grouped by status (see api/app/Models/User.php:40-62);
+          the page lists one card per status in the order of staffStatus.ts. Person names: «Familiya Ism» order.
+RULES     Project CLAUDE.md applies. No commit/push. Keys in all three locales, same wording as existing staff.* keys.
+ACCEPTANCE
+          cd api && php artisan test --filter=StaffStatus      (new tests must pass)
+          cd front && npx tsc --noEmit && npx eslint pages/staff-status.vue
+          node scripts/screenshot.js staff-status              (one run; look at the two screenshots)
+          python3 ~/.claude/skills/delegate/scripts/i18n_parity.py front/i18n/locales --changed
+OUTPUT    ≤ 30 lines, English: files; commands + results; deviations; unverified; open questions.
+```
+
+## sonnet-scout (facts only)
+
+```
+QUESTIONS
+1. Where is the document status computed for the orders list, and which statuses exist? (path:line + the enum)
+2. Which components render the «Muddati oʻtgan» badge, and do any render it twice for one row?
+3. Does front/composables/useNavigation.ts read the user's role, and from which store?
+WHERE     <abs path>/front (search here only); start from components/custom/document-row.vue and store/.
+OUTPUT    Per question: answer (1–5 lines), evidence path:line, confidence. ≤ 60 lines. Say "not found" when it is.
+```

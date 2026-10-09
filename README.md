@@ -1,38 +1,44 @@
 # claude-delegate-skill
 
-Claude Code uchun `delegate` skill'i (ishni subagentlarga sifat yo'qotmasdan bo'lish), `delegate-retro` skill'i va u tayangan 4 ta agent: `sonnet-scout`, `sonnet-coder`, `sonnet-editor`, `haiku-tester`.
+Claude Code uchun `delegate` skill'i (ishni subagentlarga sifat yo'qotmasdan va limitni tejab bo'lish), `delegate-retro` skill'i va u tayangan 4 ta agent: `sonnet-scout`, `sonnet-coder`, `sonnet-editor`, `haiku-tester`.
 
-Manba (source of truth): lokal `~/.claude` (repo `AlbatrosPromotions/claude-config`). Bu repo undan olingan, serverlarga o'rnatish uchun nusxa.
+Manba (source of truth): lokal `~/.claude` (private repo `AlbatrosPromotions/claude-config`). Bu repo undan `scripts/publish.sh` bilan ko'chirilgan nusxa, serverlarga o'rnatish uchun.
 
 ## Tarkib
 
 ```
-agents/                 sonnet-scout, sonnet-coder, sonnet-editor, haiku-tester
-skills/delegate/        SKILL.md, references/, scripts/ (agent_cost, i18n_parity, i18n_diff), metrics.tsv
-skills/delegate-retro/  SKILL.md
-CLAUDE.md.section       install.sh global CLAUDE.md ga qo'shadigan "Subagentlar" bo'limi
-install.sh              serverda: ~/.claude ga o'rnatadi (idempotent, eski nusxani zaxiralaydi)
-sync-from-local.sh      Mac'da: ~/.claude dagi yangi versiyani repo'ga olib keladi
+agents/                          sonnet-scout, sonnet-coder, sonnet-editor, haiku-tester (tool allowlist + maxTurns)
+skills/delegate/SKILL.md         qoidalar (~2k token, lead kontekstiga yuklanadi)
+skills/delegate/references/      costs.md (narxlar, o'lchovlar), enforcement.md + settings-deny.json (taqiq ro'yxati),
+                                 brief-example.md (brief namunalari), lessons.md (retro tarixi)
+skills/delegate/scripts/         agent_cost.py (sessiya narxi, $), i18n_parity.py, i18n_diff.py,
+                                 apply_deny.py (deny ro'yxatini settings.json ga qo'shadi), publish.sh (Mac -> shu repo),
+                                 tests/ (unittest)
+skills/delegate-retro/SKILL.md   /delegate-retro
+CLAUDE.md.section                install.sh global CLAUDE.md ga qo'shadigan "Subagentlar" bo'limi
+install.sh                       serverda: ~/.claude ga o'rnatadi (idempotent, eski nusxani zaxiralaydi)
 ```
 
 ## Serverga o'rnatish
 
-Talablar: Claude Code (`claude`), `git`, `python3` (skriptlar uchun). Repo private, shuning uchun server GitHub'ga kira olishi kerak (quyida).
+Talablar: Claude Code (`claude`), `git`, `python3` (3.8+). Repo private, shuning uchun server GitHub'ga kira olishi kerak (quyida).
 
 ```bash
 git clone git@github.com:AlbatrosPromotions/claude-delegate-skill.git ~/claude-delegate-skill
-bash ~/claude-delegate-skill/install.sh
+bash ~/claude-delegate-skill/install.sh --deny
 ```
 
 Skript nima qiladi:
 - `skills/delegate`, `skills/delegate-retro` ni `~/.claude/skills/` ga ko'chiradi (eski nusxa bo'lsa `*.bak.<vaqt>` ga zaxiralaydi);
 - 4 ta agent faylini `~/.claude/agents/` ga ko'chiradi (boshqa agentlaringizga tegmaydi);
 - `~/.claude/CLAUDE.md` ga "Subagentlar" bo'limini qo'shadi (bor bo'lsa tegmaydi);
-- `settings.json`, credentials, `projects/` ga tegmaydi.
+- skript testlarini ishga tushiradi;
+- `--deny` bilan: `references/settings-deny.json` dagi taqiq qoidalarini `~/.claude/settings.json` → `permissions.deny` ga qo'shadi (DB reset, force push, `git reset --hard`, `rm -rf ~` kabi buyruqlar; `references/enforcement.md`). Boshqa sozlamalarga tegmaydi.
+- `settings.json` ning qolgan qismi, credentials, `projects/` o'zgarmaydi.
 
 Claude boshqa katalogdan config o'qisa: `CLAUDE_CONFIG_DIR=/path bash install.sh`.
 
-Tekshirish: serverda `claude` ni ochib `/delegate` yozing, skill yuklanishi kerak. Agentlar `claude agents` yoki Agent tool ro'yxatida ko'rinadi.
+Tekshirish: serverda `claude` ni ochib `/delegate` yozing, skill yuklanishi kerak. Agentlar Agent tool ro'yxatida ko'rinadi.
 
 ### Server GitHub'ga qanday kiradi (deploy key, read-only)
 
@@ -59,13 +65,17 @@ Serverda:
 git -C ~/claude-delegate-skill pull && bash ~/claude-delegate-skill/install.sh
 ```
 
-Mac'da (`/delegate-retro` skill'ni o'zgartirgandan keyin):
+Mac'da (`/delegate-retro` skill'ni o'zgartirgandan keyin; retro buni o'zi taklif qiladi):
 
 ```bash
-bash sync-from-local.sh && git add -A && git commit -m "sync from ~/.claude" && git push
+bash ~/.claude/skills/delegate/scripts/publish.sh "delegate: nima o'zgardi"
 ```
+
+## Byudjet haqida
+
+Skill Max obuna limiti uchun sozlangan: limit API narxlariga taxminan proporsional sarflanadi, shuning uchun `agent_cost.py` har sessiya uchun API-ekvivalent $ ko'rsatadi, retro esa bosqichlarni $ bo'yicha solishtiradi. Asosiy tejash: lead kontekstini kichik tutish (bir bosqich = bir sessiya, hajmli o'qish scout/coder'ga), qisqa worker'lar (maxTurns), tekshiruvni skriptlar bilan. Tafsilot: `skills/delegate/references/costs.md`.
 
 ## Eslatmalar
 
-- `sonnet-coder` va `haiku-tester` ning `tools:` ro'yxatida `mcp__Claude_Browser` bor. Bu tool faqat Claude desktop ilovasida mavjud; serverda Claude Code uni e'tiborsiz qoldiradi va agent qolgan toollar bilan ishlaydi.
-- `metrics.tsv` va `references/lessons.md` lokal o'lchovlar tarixi: retro ularga tayanadi, shuning uchun repo'da saqlanadi.
+- Agentlarda interaktiv brauzer tool'i yo'q: UI skript (screenshot/regression) bilan tekshiriladi; bu eng katta token sarfi manbai edi.
+- Serverda `/usage` bilan limitni bosqich oldi va keyin tekshirib, raqamlarni retro'ga bering: bu limitning haqiqiy hisobi.

@@ -2,19 +2,23 @@
 """Where did a Claude Code session's tokens go? Reports the lead session and each of its subagents.
 
 PATH may be a session .jsonl, a session directory, a subagent .jsonl, or a project directory under
-~/.claude/projects (its newest session is used).
+~/.claude/projects (its newest session is used; with --previous, the one before it).
 
   agent_cost.py ~/.claude/projects/-Users-me-Projects-EDMS
   agent_cost.py ~/.claude/projects/-Users-me-Projects-EDMS/<session-id>.jsonl --top 8
-  agent_cost.py ~/.claude/projects/-Users-me-Projects-EDMS --reports --log   # after a stage (used by /delegate-retro)
+  agent_cost.py ~/.claude/projects/-Users-me-Projects-EDMS --previous --reports --log   # after a stage (used by /delegate-retro)
 
---reports prints each subagent's brief and final report; --log adds the session to metrics.tsv
-next to the skill (re-logging the same session replaces its row), so trends are visible over time.
+--previous takes the second-newest session of a project directory (the newest is the session that is running
+the retro). --reports prints each subagent's brief and final report; --log adds the session to
+~/.claude/delegate-metrics.tsv ($CLAUDE_CONFIG_DIR/delegate-metrics.tsv when that is set; re-logging the same
+session replaces its row), so trends are visible over time.
 
 "startup" is the context of the first API call (system prompt + tool schemas + CLAUDE.md + prompt);
 "final" is the context of the last call (roughly what the UI shows as an agent's tokens);
 "cache-read" is the sum over all calls, which is what a long, large context really costs;
-"re-read" estimates what one tool output cost: its size (in tokens) times the number of later calls.
+"re-read" estimates what one tool output cost: its size (in tokens) times the number of later calls;
+"$" is API-equivalent dollars at list prices (PRICES below): a subscription's usage limit is consumed roughly
+in proportion to it.
 """
 import argparse
 import glob
@@ -26,6 +30,20 @@ import time
 from collections import defaultdict
 
 CHARS_PER_TOKEN = 3.3  # rough average for code mixed with Uzbek/Russian text; used only for estimates
+
+# Anthropic API list prices, 2026-10-06; cache_write assumed 1.25x input
+# $ per million tokens: (input, cache_write, cache_read, output). Key = substring of the model id; the longest matching key wins.
+PRICES = {
+    "fable": (10, 12.5, 0.25, 50),
+    "opus-5-5": (4, 5, 0.20, 20),
+    "opus": (5, 6.25, 0.50, 25),
+    "sonnet-5": (2, 2.5, 0.20, 10),  # matches sonnet-5 and sonnet-5-5
+    "sonnet": (3, 3.75, 0.30, 15),
+    "haiku-5-5": (0.10, 0.125, 0.01, 0.50),
+    "haiku": (1, 1.25, 0.10, 5),
+}
+UNPRICED = set()  # models already warned about
+AGENT_TOOLS = ("Agent", "Task")  # tool_use names with which a lead spawns a subagent
 
 
 def load(path):
@@ -55,10 +73,29 @@ def describe(name, inp):
     return json.dumps(inp, ensure_ascii=False)[:100]
 
 
+def price_for(model):
+    for key in sorted(PRICES, key=len, reverse=True):
+        if key in model:
+            return PRICES[key]
+    if model not in UNPRICED:
+        UNPRICED.add(model)
+        print("warning: no price for %s, using Sonnet 5.5 prices" % model)
+    return PRICES["sonnet-5"]
+
+
+def cost(u, model):
+    """API-equivalent dollars of one call's usage (a call with no tokens, e.g. a <synthetic> row, costs nothing)."""
+    tokens = (u.get("input_tokens", 0), u.get("cache_creation_input_tokens", 0), u.get("cache_read_input_tokens", 0),
+              u.get("output_tokens", 0))
+    return sum(t * p for t, p in zip(tokens, price_for(model))) / 1e6 if any(tokens) else 0.0
+
+
 def analyze(path):
     rows = load(path)
     seen, calls, model = set(), [], None
+    call_models = []  # message.model of each counted call, parallel to calls
     uses, sizes, order, issued = {}, {}, [], {}
+    failed = set()  # tool_use ids whose result is an error; a failed Agent call (unknown agent type, denied) has no transcript
     for r in rows:
         m = r.get("message") or {}
         if r.get("type") == "assistant":
@@ -66,6 +103,7 @@ def analyze(path):
             if m.get("id") not in seen and m.get("usage"):
                 seen.add(m.get("id"))
                 calls.append(m["usage"])
+                call_models.append(m.get("model"))
             for c in m.get("content") or []:
                 if c.get("type") == "tool_use":
                     uses[c["id"]] = (c["name"], describe(c["name"], c.get("input")), json.dumps(c.get("input"), sort_keys=True))
@@ -74,6 +112,8 @@ def analyze(path):
         elif r.get("type") == "user" and isinstance(m.get("content"), list):
             for c in m["content"]:
                 if c.get("type") == "tool_result":
+                    if c.get("is_error"):
+                        failed.add(c["tool_use_id"])
                     cc = c.get("content")
                     sizes[c["tool_use_id"]] = (sum(len(x.get("text", "")) for x in cc if isinstance(x, dict))
                                                if isinstance(cc, list) else len(str(cc or "")))
@@ -97,6 +137,8 @@ def analyze(path):
         "cache_read": sum(u.get("cache_read_input_tokens", 0) for u in calls),
         "cache_write": sum(u.get("cache_creation_input_tokens", 0) for u in calls),
         "output": sum(u.get("output_tokens", 0) for u in calls),
+        "usd": sum(cost(u, cm or model or "?") for u, cm in zip(calls, call_models)),
+        "agent_calls": len({t for t in order if uses[t][0] in AGENT_TOOLS and t not in failed}),
         "by_tool": dict(by_tool),
         # A tool output is re-sent (as cache reads) on every later call, so its real cost is size x later calls.
         "costliest": sorted(((sizes.get(t, 0) / CHARS_PER_TOKEN * max(0, len(calls) - 1 - issued[t]),
@@ -111,21 +153,35 @@ def k(n):
     return "%dk" % round(n / 1000) if n >= 1000 else str(n)
 
 
-def resolve(path):
+def resolve(path, previous=False):
+    """The session .jsonl to analyze; for a project directory the newest by mtime, or the second-newest with previous."""
     path = os.path.expanduser(path.rstrip("/"))
-    if path.endswith(".jsonl"):
-        return path
-    if os.path.isdir(path) and os.path.exists(path + ".jsonl"):
-        return path + ".jsonl"
-    sessions = glob.glob(os.path.join(path, "*.jsonl"))
+    if path.endswith(".jsonl") or (os.path.isdir(path) and os.path.exists(path + ".jsonl")):
+        if previous:
+            print("note: --previous only applies to a project directory; using the session you named", file=sys.stderr)
+        return path if path.endswith(".jsonl") else path + ".jsonl"
+    sessions = sorted(glob.glob(os.path.join(path, "*.jsonl")), key=lambda p: (os.path.getmtime(p), p), reverse=True)
     if not sessions:
         sys.exit("no session .jsonl found at %s" % path)
-    return max(sessions, key=os.path.getmtime)
+    if previous:
+        if len(sessions) < 2:
+            sys.exit("--previous needs at least two sessions in %s, found only %s" % (path, os.path.basename(sessions[0])))
+        return sessions[1]
+    return sessions[0]
 
 
-METRICS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "metrics.tsv")
+def session_title(session):
+    """The session's custom title (<session-dir>/custom-title.json, key customTitle), or ''."""
+    try:
+        with open(os.path.join(os.path.abspath(session)[:-len(".jsonl")], "custom-title.json"), encoding="utf-8") as f:
+            return " ".join(str(json.load(f).get("customTitle") or "").split())
+    except (OSError, ValueError, AttributeError):
+        return ""
+
+
+METRICS = os.path.join(os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude"), "delegate-metrics.tsv")
 COLUMNS = ["date", "project", "session", "title", "lead_model", "lead_calls", "lead_final_k", "lead_cache_read_M",
-           "subagents", "general_purpose", "sub_startup_avg_k", "sub_cache_read_M"]
+           "subagents", "general_purpose", "sub_startup_avg_k", "sub_cache_read_M", "lead_usd", "sub_usd"]
 
 
 def brief_and_report(path):
@@ -180,17 +236,12 @@ def project_name(session):
 
 def log_metrics(session, lead, subs_info):
     session = os.path.abspath(session)
-    title_file = os.path.join(session[:-len(".jsonl")], "custom-title.json")
-    title = ""
-    if os.path.exists(title_file):
-        with open(title_file, encoding="utf-8") as f:
-            title = json.load(f).get("customTitle", "")
     startups = [a["startup"] for _, a in subs_info]
     row = {
         "date": time.strftime("%Y-%m-%d", time.localtime(os.path.getmtime(session))),
         "project": project_name(session),
         "session": os.path.basename(session)[:8],
-        "title": " ".join(title.split())[:60],
+        "title": session_title(session)[:60],
         "lead_model": lead["model"].replace("claude-", ""),
         "lead_calls": lead["calls"],
         "lead_final_k": round(lead["final"] / 1000),
@@ -199,11 +250,15 @@ def log_metrics(session, lead, subs_info):
         "general_purpose": sum(1 for meta, _ in subs_info if meta.get("agentType") == "general-purpose"),
         "sub_startup_avg_k": round(sum(startups) / len(startups) / 1000) if startups else 0,
         "sub_cache_read_M": round(sum(a["cache_read"] for _, a in subs_info) / 1e6, 2),
+        "lead_usd": "%.2f" % lead["usd"],
+        "sub_usd": "%.2f" % sum(a["usd"] for _, a in subs_info),
     }
     rows = []
     if os.path.exists(METRICS):
         with open(METRICS, encoding="utf-8") as f:
-            rows = [dict(zip(COLUMNS, line.split("\t"))) for line in f.read().splitlines()[1:] if line.strip()]
+            lines = f.read().splitlines()
+        header = lines[0].split("\t") if lines else []  # a file written with fewer columns still loads; the new cells stay empty
+        rows = [dict(zip(header, line.split("\t"))) for line in lines[1:] if line.strip()]
     rows = [r for r in rows if r.get("session") != row["session"]] + [row]  # re-logging a session replaces its row
     with open(METRICS, "w", encoding="utf-8") as f:
         f.write("\t".join(COLUMNS) + "\n")
@@ -215,16 +270,21 @@ def log_metrics(session, lead, subs_info):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("path")
+    ap.add_argument("--previous", action="store_true",
+                    help="for a project directory: the second-newest session (the newest is the one running the retro)")
     ap.add_argument("--top", type=int, default=5, help="costliest tool outputs to list per session (default 5)")
     ap.add_argument("--reports", action="store_true", help="also print each subagent's brief (start) and final report")
-    ap.add_argument("--log", action="store_true", help="add or update this session's row in metrics.tsv next to the skill")
+    ap.add_argument("--log", action="store_true",
+                    help="add or update this session's row in delegate-metrics.tsv in the Claude config dir (~/.claude)")
     args = ap.parse_args()
 
-    session = resolve(args.path)
+    session = resolve(args.path, args.previous)
     lead = analyze(session)
-    print("Session %s  (%s)" % (os.path.basename(session), lead["model"]))
-    print("  calls %d | startup %s | final context %s | cache-read %s | cache-write %s | output %s" % (
-        lead["calls"], k(lead["startup"]), k(lead["final"]), k(lead["cache_read"]), k(lead["cache_write"]), k(lead["output"])))
+    title = session_title(session)
+    print("Session %s  (%s)%s" % (os.path.basename(session), lead["model"], '  "%s"' % title if title else ""))
+    print("  calls %d | startup %s | final context %s | cache-read %s | cache-write %s | output %s | ~$%.2f" % (
+        lead["calls"], k(lead["startup"]), k(lead["final"]), k(lead["cache_read"]), k(lead["cache_write"]), k(lead["output"]),
+        lead["usd"]))
     total_out = sum(v[1] for v in lead["by_tool"].values()) or 1
     tools = sorted(lead["by_tool"].items(), key=lambda kv: -kv[1][1])[:6]
     print("  tool output by tool: " + ", ".join("%s x%d %s chars (%d%%)" % (n, c, k(ch), 100 * ch // total_out) for n, (c, ch) in tools))
@@ -240,7 +300,8 @@ def main():
     subs_info, hints = [], []
     if subs:
         print("\nSubagents (%d):" % len(subs))
-        print("  %-17s %-11s %5s %8s %7s %10s %7s  %s" % ("type", "model", "calls", "startup", "final", "cache-read", "output", "description"))
+        print("  %-17s %-11s %5s %8s %7s %10s %7s %7s  %s" % (
+            "type", "model", "calls", "startup", "final", "cache-read", "output", "$", "description"))
     else:
         print("\nNo subagents.")
     for p in subs:
@@ -251,12 +312,16 @@ def main():
         a = analyze(p)
         subs_info.append((meta, a))
         atype = meta.get("agentType", "?")
-        print("  %-17s %-11s %5d %8s %7s %10s %7s  %s" % (
+        print("  %-17s %-11s %5d %8s %7s %10s %7s %7.2f  %s" % (
             atype[:17], a["model"].replace("claude-", "")[:11], a["calls"], k(a["startup"]), k(a["final"]),
-            k(a["cache_read"]), k(a["output"]), meta.get("description", "")[:50]))
+            k(a["cache_read"]), k(a["output"]), a["usd"], meta.get("description", "")[:50]))
         if atype == "general-purpose" and a["startup"] > 40000:
             hints.append("'%s' ran as general-purpose (startup %s): a lean agent with a tools allowlist starts at ~5k + CLAUDE.md."
                          % (meta.get("description", "?"), k(a["startup"])))
+    if lead["agent_calls"] > len(subs):
+        print("warning: the lead spawned %d agents but %d subagent transcripts were found under %s; "
+              "either the session was resumed under a new id (earlier agents sit under the original id) or the transcript layout "
+              "changed (script written for Claude Code 2.1.x)" % (lead["agent_calls"], len(subs), sub_dir))
     if args.reports and subs:
         lead_rows = load(session)
         for p, (meta, _a) in zip(subs, subs_info):
@@ -270,7 +335,9 @@ def main():
                 print("  next action: " + a)
             print("  next words: " + (words or "(none found)"))
     if subs:
-        print("\nCache-read: lead %s vs all subagents %s." % (k(lead["cache_read"]), k(sum(a["cache_read"] for _, a in subs_info))))
+        sub_usd = sum(a["usd"] for _, a in subs_info)
+        print("\nCost (API-equivalent): lead $%.2f | subagents $%.2f | total $%.2f   (cache-read: lead %s vs subagents %s)" % (
+            lead["usd"], sub_usd, lead["usd"] + sub_usd, k(lead["cache_read"]), k(sum(a["cache_read"] for _, a in subs_info))))
     if lead["final"] > 300000:
         hints.append("The lead's context reached %s; everything it read early was re-read on each later call. "
                      "Push bulk reading to scouts or briefs, or split the work at a boundary." % k(lead["final"]))

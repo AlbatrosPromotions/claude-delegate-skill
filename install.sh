@@ -3,14 +3,24 @@
 # shu repo'dan Claude Code config katalogiga (~/.claude) o'rnatadi.
 #
 #   git clone git@github.com:AlbatrosPromotions/claude-delegate-skill.git ~/claude-delegate-skill
-#   bash ~/claude-delegate-skill/install.sh
+#   bash ~/claude-delegate-skill/install.sh [--deny]
 #
+# --deny : references/settings-deny.json dagi taqiq qoidalarini ~/.claude/settings.json ga qo'shadi
+#          (ma'lumotni yo'q qiluvchi buyruqlar: DB reset, force push, git reset --hard ...).
 # Yangilash:  git -C ~/claude-delegate-skill pull && bash ~/claude-delegate-skill/install.sh
 # Claude boshqa katalogdan config o'qisa:  CLAUDE_CONFIG_DIR=/path bash install.sh
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+APPLY_DENY=0
+for arg in "$@"; do
+  case "$arg" in
+    --deny) APPLY_DENY=1 ;;
+    -h|--help) sed -n '2,12p' "$0"; exit 0 ;;
+    *) echo "noma'lum parametr: $arg" >&2; exit 1 ;;
+  esac
+done
 
 for p in skills/delegate skills/delegate-retro agents; do
   [ -d "$REPO_DIR/$p" ] || { echo "XATO: $REPO_DIR/$p topilmadi (repo to'liq clone qilinganmi?)" >&2; exit 1; }
@@ -59,9 +69,22 @@ echo "==> tekshiruv"
 if command -v python3 >/dev/null 2>&1; then
   echo "    python3: $(python3 --version 2>&1)"
   python3 -m py_compile "$CLAUDE_DIR"/skills/delegate/scripts/*.py && echo "    skriptlar kompilyatsiya qilindi (ok)"
+  if command -v git >/dev/null 2>&1; then
+    if python3 -m unittest discover -s "$CLAUDE_DIR/skills/delegate/scripts/tests" >/tmp/delegate-tests.log 2>&1; then
+      echo "    skript testlari: $(grep -E '^Ran ' /tmp/delegate-tests.log) OK"
+    else
+      echo "    OGOHLANTIRISH: skript testlari o'tmadi, qarang: /tmp/delegate-tests.log"
+    fi
+  fi
   find "$CLAUDE_DIR/skills/delegate/scripts" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
+  if [ "$APPLY_DENY" = 1 ]; then
+    echo "==> taqiq qoidalari (permissions.deny) qo'shilmoqda"
+    python3 "$CLAUDE_DIR/skills/delegate/scripts/apply_deny.py" --settings "$CLAUDE_DIR/settings.json"
+  else
+    echo "    taqiq qoidalari qo'shilmadi; ko'rish: python3 $CLAUDE_DIR/skills/delegate/scripts/apply_deny.py --dry-run  (yoki install.sh --deny)"
+  fi
 else
-  echo "    OGOHLANTIRISH: python3 topilmadi: skill matni ishlaydi, lekin scripts/*.py (parity, agent_cost) ishlamaydi"
+  echo "    OGOHLANTIRISH: python3 topilmadi: skill matni ishlaydi, lekin scripts/*.py (parity, agent_cost, apply_deny) ishlamaydi"
 fi
 if command -v claude >/dev/null 2>&1; then
   echo "    claude: $(claude --version 2>&1 | head -1)"
@@ -70,7 +93,7 @@ else
 fi
 
 echo "==> o'rnatilgan fayllar:"
-find "$CLAUDE_DIR/skills/delegate" "$CLAUDE_DIR/skills/delegate-retro" -type f | sed "s|^$CLAUDE_DIR/|    |" | sort
+find "$CLAUDE_DIR/skills/delegate" "$CLAUDE_DIR/skills/delegate-retro" -type f -not -path '*/tests/*' | sed "s|^$CLAUDE_DIR/|    |" | sort
 for f in "$REPO_DIR"/agents/*.md; do echo "    agents/$(basename "$f")"; done
 echo
 echo "Tayyor. Tekshirish:  claude  ->  /delegate  (skill yuklanishi kerak)"
