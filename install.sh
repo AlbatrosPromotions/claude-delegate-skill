@@ -10,6 +10,8 @@
 # --hooks : references/settings-hooks.json dagi o'lchov hook'larini qo'shadi (har sessiya narxini avtomatik
 #           loglaydi, har subagent narxini lead'ga ko'rsatadi).
 # Yangilash:  git -C ~/claude-delegate-skill pull && bash ~/claude-delegate-skill/install.sh
+# Yangilanish taklifi: --hooks bilan o'rnatilgan mashinada SessionStart hook kuniga bir marta (fonda, git ls-remote)
+#           repo HEAD ni o'rnatilgan commit bilan solishtiradi; yangisi bo'lsa Claude sessiya boshida yangilashni taklif qiladi.
 # Claude boshqa katalogdan config o'qisa:  CLAUDE_CONFIG_DIR=/path bash install.sh
 set -euo pipefail
 
@@ -17,11 +19,12 @@ REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 APPLY_DENY=0
 APPLY_HOOKS=0
+FLAGS=""
 for arg in "$@"; do
   case "$arg" in
-    --deny) APPLY_DENY=1 ;;
-    --hooks) APPLY_HOOKS=1 ;;
-    -h|--help) sed -n '2,14p' "$0"; exit 0 ;;
+    --deny) APPLY_DENY=1; FLAGS="$FLAGS --deny" ;;
+    --hooks) APPLY_HOOKS=1; FLAGS="$FLAGS --hooks" ;;
+    -h|--help) sed -n '2,15p' "$0"; exit 0 ;;
     *) echo "noma'lum parametr: $arg" >&2; exit 1 ;;
   esac
 done
@@ -93,6 +96,10 @@ if command -v python3 >/dev/null 2>&1; then
   else
     echo "    hook'lar qo'shilmadi; ko'rish: python3 $CLAUDE_DIR/skills/delegate/scripts/apply_hooks.py --dry-run  (yoki install.sh --hooks)"
   fi
+  # Yangilanish taklifi: nima o'rnatilgani $CLAUDE_DIR/delegate-install.json ga yoziladi (commit, remote, shu clone, flaglar).
+  # SessionStart hook kuniga bir marta fonda (git ls-remote, o'sha deploy key) repo HEAD ni u bilan solishtiradi va yangisi
+  # bo'lsa Claude sessiya boshida yangilashni taklif qiladi. O'chirish: DELEGATE_UPDATE_CHECK=0 yoki shu faylni o'chirish.
+  echo "==> o'rnatilgan versiya: $(python3 "$CLAUDE_DIR/skills/delegate/scripts/update_check.py" --installed "$REPO_DIR" --flags "$FLAGS" 2>&1 || true)"
 else
   echo "    OGOHLANTIRISH: python3 topilmadi: skill matni ishlaydi, lekin scripts/*.py (parity, agent_cost, apply_deny) ishlamaydi"
 fi
