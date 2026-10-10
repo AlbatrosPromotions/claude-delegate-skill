@@ -4,7 +4,9 @@
 One script serves three events (references/settings-hooks.json has the config, apply_hooks.py installs it). The event is
 one JSON object on stdin; the only thing ever written to stdout is one JSON object with "additionalContext":
 
-  SessionStart      (matcher startup) one reminder line for the lead: read the usage limit now and before the final message
+  SessionStart      (matcher startup) one reminder line for the lead: read the usage limit now and before the final message;
+                    on a machine that installed the skill from the install repo, an update line first when a newer version is
+                    published (update_check.py: the check runs detached once a day, the hook reads its last result)
   SessionEnd        a session with >= 30 lead calls or any subagent is logged to delegate-metrics.tsv, as `agent_cost.py --log` does,
                     and delegate-report.txt (the stage comparison table) is refreshed
   PostToolUse       (matcher ^Agent$) a foreground subagent handed back: one "delegate-cost:" line for the lead
@@ -49,8 +51,15 @@ REMINDER = ("delegate: costs are logged automatically. If this session is a work
 
 
 def session_start(event):
-    if event.get("source") in ("startup", "clear"):  # not on resume or compact (the lead already has the note), nor without a source
-        return REMINDER
+    if event.get("source") not in ("startup", "clear"):  # not on resume or compact (the lead already has the note), nor without a source
+        return None
+    try:
+        import update_check
+        update = update_check.notice()
+    except Exception as e:  # the update line is a courtesy; the reminder must come through anyway
+        print("delegate hooks: update check: %s: %s" % (type(e).__name__, e), file=sys.stderr)
+        update = None
+    return update + "\n" + REMINDER if update else REMINDER
 
 
 def session_end(event):
