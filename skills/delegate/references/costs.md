@@ -6,6 +6,22 @@ Not loaded automatically. `SKILL.md` keeps the rules; this file keeps the number
 
 The user works on a Claude Max subscription, not on API billing. The limit (a 5-hour window and a weekly allowance, shown by `/usage`) is consumed roughly in proportion to API list prices, so the API-equivalent $ printed by `scripts/agent_cost.py` is the best available proxy. Anthropic does not publish the exact formula, so the metrics file keeps the weekly all-models % before and after each stage (`usage_before`, `usage_after`) and `agent_cost.py` prints the resulting `limit calibration` (%/$). Several stages of that line are the real exchange rate; until then the $ figures are relative, not absolute. The desktop app exposes the limits to the lead as the `get_usage` tool (5-hour window, weekly all models, weekly per model); the terminal shows them with `/usage`.
 
+## Limit calibration (measured 2026-10-12, Max plan, desktop app)
+
+Every `get_usage` reading in the transcripts of 2026-10-08 → 10-12 was lined up against the cumulative API-equivalent $ of every session and subagent up to that moment (`agent_cost` prices). The weekly all-models meter went 46% → 88% over $652 of transcript-$: about $15.5 per 1%, so 100% of the week ≈ $1,500 at this mix. The rate depends on the model mix:
+
+| Interval (UTC) | Meter | Transcript $ in the interval (by model) | $ per 1% |
+|---|---|---|---|
+| 10-08 22:00 → 23:33 | +2% | $50 (Sonnet 30, Opus 20) | 25 |
+| 10-08 23:33 → 10-09 17:23 | +11% | $280 (Sonnet 175, Opus 72, Fable 33) | 25.5 |
+| 10-10 12:44 → 10-11 01:23 | +10% | $116 (Fable 112, Opus 4) | 11.6 |
+| 10-11 01:23 → 11:10 (one Fable session) | +6% | $66 (Fable 59, Sonnet 5) | 10.9 |
+| 10-11 13:01 → 10-12 10:34 | +2% | $27 (Fable 17, Opus 10) | 13.4 |
+
+Reading: Opus/Sonnet work costs the limit about $25 per 1%, Fable work about $11 per 1%, so per API-equivalent dollar Fable consumes the weekly allowance ~2.3× faster than Opus 5.5; per token, with the 2.5× price on top, a Fable token costs the limit 5–6× an Opus token. The Fable meter itself moved 22% → 34% for $59 of Fable work: that per-model allowance is worth ≈ $500. Caveat: usage outside Claude Code (claude.ai chat) in the same window would inflate the Fable intervals somewhat; the single-session interval is the cleanest point. Since the rework (10-09 22:00 → 10-12 11:00) the meter rose 61% → 88% for $289, of which Fable $208 (72%), Opus $62, Sonnet $19.
+
+Hidden thinking: a lead's output tokens are 55–79% invisible thinking (output minus the visible text, thinking and tool-input characters at 4 chars/token): Fable 63–73% (53f065d2: 1.09M output tokens, ~695k hidden ≈ $35), Opus at `max` 56–79%. On Opus output is a small share of a session (01a6213c: $1.9 of $8.3); on Fable it is about half (53f065d2: $54 of $107; 52322d0f: $36 of $68), so effort matters for a Fable lead far more than for Opus.
+
 ## API list prices used by agent_cost.py ($ per million tokens, 2026-10-06)
 
 | Model | input | cache write (≈1.25×) | cache read | output |
@@ -43,3 +59,17 @@ What follows from the table:
 | 8 | 14.50 | 26.16 | 40.66 | 49.5M | 96.3M |
 
 Reading: the lead got 3× cheaper, but the workers added as much as the lead saved, so the total only fell once the workers were kept short (stage 7). The earlier retros compared cache-read tokens, which hid this because a Sonnet cache read costs the same as an Opus 5.5 one. Delegation buys quality, review and a small lead context; it saves the limit only when every worker's context × calls is also kept small.
+
+## Sessions since the rework (2026-10-10 → 10-12, every project)
+
+| Session | Lead | Lead $ | Workers | Workers $ | Total | Note |
+|---|---|---|---|---|---|---|
+| 52322d0f TZ analysis | Fable, 122 calls, avg ctx 380k | 67.80 | none | 0 | 67.80 | 723k output tokens; read 100k chars of the TZ in calls 2–5 |
+| 53f065d2 TZ → architecture package | Fable, 251 calls, avg ctx 357k, 5 compactions | 107.12 | 6 scouts | 4.87 | 111.99 | 1.09M output tokens; 1.2M chars of documents written through heredocs; two scouts hit the 40-turn cap |
+| 01a6213c Delice admin cleanup | Opus, 136 calls | 8.27 | 2 coders (120, 113 calls) | 9.76 | 18.03 | coder A hit the 120-turn cap on a 9.1k-char brief |
+| b7a78328 Penpot pilot screen | Opus, 53 calls | 4.05 | 1 `general-purpose` (50k startup) | 0.54 | 4.59 | no lean agent had the Penpot tools; `sonnet-penpot` written afterwards |
+| 64c5b771 five Penpot screens | Opus, 82 calls | 6.50 | 5 `sonnet-penpot` (12k startup, 13–29 calls) | 1.74 | 8.24 | every screen self-checked and re-exported by the lead |
+| ce076143 SMM brief package | Opus, 76 calls | 7.00 | none | 0 | 7.00 | usage 87% → 88% |
+| 11 smaller Opus sessions (Herd, sos-scrum, scratch) | 43–97 calls | 1.7–6.1 each | none | 0 | ≈ 33 | |
+
+Totals: $289 in three days, Fable $208. The three Fable sessions of the TZ thread ($41 + $68 + $107 = $216) are the whole story of the week's consumption; delegation, where it was used, cost $17 for 14 workers.

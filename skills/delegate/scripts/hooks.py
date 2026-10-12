@@ -6,9 +6,12 @@ one JSON object on stdin; the only thing ever written to stdout is one JSON obje
 
   SessionStart      (matcher startup) one reminder line for the lead: read the usage limit now and before the final message;
                     on a machine that installed the skill from the install repo, an update line first when a newer version is
-                    published (update_check.py: the check runs detached once a day, the hook reads its last result)
-  SessionEnd        a session with >= 30 lead calls or any subagent is logged to delegate-metrics.tsv, as `agent_cost.py --log` does,
-                    and delegate-report.txt (the stage comparison table) is refreshed
+                    published (update_check.py: the check runs detached once a day, the hook reads its last result).
+                    Before that, the sessions of this project that the SessionEnd hook missed (left open, resumed and grown)
+                    are logged, within a few seconds (agent_cost.catch_up)
+  SessionEnd        a session with >= 30 lead calls or any subagent is logged to delegate-metrics.tsv, as `agent_cost.py --log` does
+                    (the weekly % the lead read with get_usage fills usage_before/usage_after), and delegate-report.txt (the
+                    stage comparison table) is refreshed
   PostToolUse       (matcher ^Agent$) a foreground subagent handed back: one "delegate-cost:" line for the lead
   UserPromptSubmit  a background subagent's <task-notification> arrived: the same line; any other prompt: nothing, at once
 
@@ -22,7 +25,6 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # agent_cost.py lives next to this file
 
-MIN_LEAD_CALLS = 30  # SessionEnd: a shorter session without subagents is not worth a row
 MIN_AGENT_CALLS = 2  # a subagent with fewer calls has only just been launched (a background launch): nothing to report yet
 
 
@@ -44,13 +46,22 @@ def agent_line(event, tool_use_id=None, agent_id=None):
     return agent_cost.summarize_agent(meta, transcript, session, a) if a["calls"] >= MIN_AGENT_CALLS else None
 
 
-REMINDER = ("delegate: costs are logged automatically. If this session is a work stage (it will spawn subagents or run more than "
-            "~30 calls), read the plan limits now (desktop: the get_usage tool; terminal: /usage) and note the weekly all-models %; "
-            "read them again right before your final message and put both in the handoff note as usage before/after. "
-            "Afterwards the user runs /delegate-retro in a new session.")
+REMINDER = ("delegate: costs are logged automatically, and the weekly all-models % you read with get_usage goes into the metrics "
+            "row by itself. If this session is a work stage (it will spawn subagents or run more than ~30 calls), read the plan "
+            "limits now (desktop: the get_usage tool; terminal: /usage) and again right before your final message, and put both "
+            "in the handoff note as usage before/after. Afterwards the user runs /delegate-retro in a new session.")
+CATCH_UP_BUDGET = 5.0  # seconds: the SessionStart hook has a 10 s timeout and must never make a session wait for bookkeeping
 
 
 def session_start(event):
+    try:  # sessions of this project that the SessionEnd hook missed are logged now; the one starting is skipped
+        path = os.path.expanduser(str(event.get("transcript_path") or ""))
+        if path.endswith(".jsonl") and os.path.isdir(os.path.dirname(path)):
+            import agent_cost
+            if agent_cost.catch_up(os.path.dirname(path), exclude=path, budget=CATCH_UP_BUDGET):
+                agent_cost.write_report(agent_cost.project_name(path))
+    except Exception as e:  # bookkeeping; the reminder must come through anyway
+        print("delegate hooks: catch-up: %s: %s" % (type(e).__name__, e), file=sys.stderr)
     if event.get("source") not in ("startup", "clear"):  # not on resume or compact (the lead already has the note), nor without a source
         return None
     try:
@@ -65,10 +76,7 @@ def session_start(event):
 def session_end(event):
     import agent_cost
     session = session_of(event)
-    lead = agent_cost.analyze(session)
-    subs = agent_cost.subagent_files(session)
-    if lead["calls"] >= MIN_LEAD_CALLS or subs:
-        agent_cost.log_metrics(session, lead, [(agent_cost.read_meta(p), agent_cost.analyze(p)) for p in subs], quiet=True)
+    if agent_cost.log_if_substantial(session):
         agent_cost.write_report(agent_cost.project_name(session))
 
 

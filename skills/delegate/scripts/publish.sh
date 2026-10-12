@@ -3,7 +3,7 @@
 #
 #   publish.sh ["commit message"]      default message: "sync from ~/.claude <YYYY-MM-DD>"
 #
-# Clones the repo (depth 1) into a temp dir, mirrors skills/delegate, skills/delegate-retro and four agents from
+# Clones the repo (depth 1) into a temp dir, mirrors skills/delegate, skills/delegate-retro and five agents from
 # $CLAUDE_CONFIG_DIR (default ~/.claude) into it, then commits and pushes when anything changed.
 set -euo pipefail
 
@@ -11,7 +11,7 @@ REPO_URL=git@github.com:AlbatrosPromotions/claude-delegate-skill.git
 SRC=${CLAUDE_CONFIG_DIR:-$HOME/.claude}
 MSG=${1:-"sync from ~/.claude $(date +%F)"}
 SKILLS=(delegate delegate-retro)
-AGENTS=(haiku-tester sonnet-coder sonnet-editor sonnet-scout)
+AGENTS=(haiku-tester sonnet-coder sonnet-editor sonnet-penpot sonnet-scout)
 
 command -v rsync >/dev/null || { echo "rsync is required" >&2; exit 1; }
 for s in "${SKILLS[@]}"; do [ -d "$SRC/skills/$s" ] || { echo "missing $SRC/skills/$s" >&2; exit 1; }; done

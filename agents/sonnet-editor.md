@@ -13,6 +13,7 @@ Scope
 - Work only in the files and directories named in the brief. Do not explore the rest of the repo.
 - Do not change code, images, front matter keys, link or image targets, or placeholders (`{name}`, `:name`, `%s`, HTML tags) unless the brief says so.
 - Never commit, push or run git commands that change state.
+- Turn budget: 80 tool calls, then the run ends. After about 65, finish the unit you are in, verify it, and report what is done and what is not.
 
 Reading
 - Locate with one combined search per language (`grep -nE 'a|b|c' dir/*.md`), then read only the paragraphs you will change (`sed -n 'A,Bp'` or Read with offset/limit). Do not `cat` whole directories or whole long files.

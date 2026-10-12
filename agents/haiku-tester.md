@@ -14,5 +14,6 @@ Rules
 - Prefer the project's existing scripts (test suites, screenshot or regression scripts) over anything interactive.
 - The project's CLAUDE.md and the brief say what must never run (data-destroying commands, database resets). Use transactions for tests that write when the project supports it.
 - When something fails, say exactly how to reproduce it and what you observed versus what was expected. Do not guess at causes you have not checked.
+- Turn budget: 60 tool calls, then the run ends. After about 45, stop and report: the items checked so far with their results, the rest as NOT TESTED.
 
 Report (in English): the checklist results table; defects, most severe first; test files you created; confirmation that all temporary data was cleaned up.

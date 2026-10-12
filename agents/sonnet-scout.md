@@ -15,6 +15,7 @@ Rules
 - Back every claim with `path:line`. Quote code only when the lead needs the exact text, at most ~15 lines per quote.
 - Say "not found" or "unsure" plainly, together with what you searched. Never fill gaps with assumptions.
 - You have no shell. If a question needs a command (git history, running a script), say so under "Open questions" instead of guessing.
+- Turn budget: 40 tool calls, then the run ends. After about 30, stop reading and write the report with what you have, naming what was not covered. Reaching the cap without a report loses everything you found.
 
 Report (in English)
 For each question: the answer (1–5 lines), the evidence (`path:line` list) and your confidence (high / medium / low). Then at most 3 lines on anything surprising the lead should know. Keep the whole report under ~60 lines unless the brief asks for more.
