@@ -13,6 +13,8 @@ one JSON object on stdin; the only thing ever written to stdout is one JSON obje
                     (the weekly % the lead read with get_usage fills usage_before/usage_after), and delegate-report.txt (the
                     stage comparison table) is refreshed
   PostToolUse       (matcher ^Agent$) a foreground subagent handed back: one "delegate-cost:" line for the lead
+  PostToolUse       (matcher *, argument "context") the lead's context passed 300k, or a further 100k: one line with its size and
+                    what each further call re-reads, and the handoff rule; never inside a subagent
   UserPromptSubmit  a background subagent's <task-notification> arrived: the same line; any other prompt: nothing, at once
 
 It always exits 0: a measurement hook must never block or break a session. A problem is one line on stderr.
@@ -51,6 +53,66 @@ REMINDER = ("delegate: costs are logged automatically, and the weekly all-models
             "limits now (desktop: the get_usage tool; terminal: /usage) and again right before your final message, and put both "
             "in the handoff note as usage before/after. Afterwards the user runs /delegate-retro in a new session.")
 CATCH_UP_BUDGET = 5.0  # seconds: the SessionStart hook has a 10 s timeout and must never make a session wait for bookkeeping
+
+
+NUDGE_FROM, NUDGE_STEP = 300000, 100000  # tokens. 2026-10-13: the ~200k handoff rule held in no stage since 10-07; 9e9e439d
+# spent $20 of its $38 after 466k. Below ~300k a fresh session's restart (~65k startup plus re-reading) costs about what it saves.
+TAIL = 512 * 1024  # bytes read from the end of the transcript to find the last call's usage
+NUDGE = ("delegate: your context is now %dk tokens, and every further call re-reads all of it (~$%.2f a call). At the next "
+         "natural boundary write the handoff note (done, next, decisions, open questions, usage before/after) and continue in a "
+         "fresh session; until then hand bulk reading and writing to subagents.")
+
+
+def last_context(path):
+    """(context tokens, model) of the transcript's last API call, from its last TAIL bytes; (0, None) when none is there."""
+    with open(path, "rb") as f:
+        f.seek(0, os.SEEK_END)
+        f.seek(max(0, f.tell() - TAIL))
+        lines = f.read().decode("utf-8", "replace").splitlines()
+    for line in reversed(lines):
+        if '"usage"' not in line:
+            continue
+        try:
+            row = json.loads(line)
+        except ValueError:  # the first line of the tail is usually cut
+            continue
+        m = row.get("message") if isinstance(row, dict) else None
+        u = m.get("usage") if isinstance(m, dict) else None
+        if row.get("type") == "assistant" and isinstance(u, dict):
+            tokens = sum(u.get(k) or 0 for k in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
+            return tokens, m.get("model")
+    return 0, None
+
+
+def context_nudge(event):
+    """The lead's context passed NUDGE_FROM, or a further NUDGE_STEP since the last line: the NUDGE line, once per step (after
+    a compaction the context falls, so passing a step again is told again). A tool call inside a subagent (agent_id set) is
+    skipped: the line is for the lead. The last step told is kept per transcript in delegate-nudge.json next to the metrics file."""
+    if event.get("agent_id"):
+        return None
+    session = session_of(event)
+    tokens, model = last_context(session)
+    if tokens < NUDGE_FROM:
+        return None
+    step = NUDGE_FROM + (tokens - NUDGE_FROM) // NUDGE_STEP * NUDGE_STEP
+    import agent_cost
+    state_path = os.path.join(os.path.dirname(agent_cost.METRICS), "delegate-nudge.json")
+    try:
+        with open(state_path, encoding="utf-8") as f:
+            state = json.load(f)
+        state = state if isinstance(state, dict) else {}
+    except (OSError, ValueError):
+        state = {}
+    if state.get(session) == step:
+        return None
+    state.pop(session, None)
+    state[session] = step
+    state = dict(list(state.items())[-200:])  # the newest 200 transcripts are enough
+    tmp = "%s.%d.tmp" % (state_path, os.getpid())
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(state, f)
+    os.replace(tmp, state_path)
+    return NUDGE % (tokens // 1000, tokens * agent_cost.price_for(model or "")[2] / 1e6)
 
 
 def session_start(event):
@@ -103,8 +165,9 @@ def main():
         if not isinstance(event, dict):
             raise ValueError("expected a JSON object on stdin")
         name = event.get("hook_event_name")
+        handler = context_nudge if name == "PostToolUse" and "context" in sys.argv[1:] else HANDLERS.get(name)
         with contextlib.redirect_stdout(sys.stderr):  # agent_cost prints warnings (an unpriced model); stdout is for the answer only
-            text = HANDLERS[name](event) if name in HANDLERS else None
+            text = handler(event) if handler else None
     except (Exception, SystemExit) as e:
         print("delegate hooks: %s: %s" % (type(e).__name__, e), file=sys.stderr)
         return

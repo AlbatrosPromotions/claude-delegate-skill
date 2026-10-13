@@ -2,6 +2,7 @@
 and catch_up(): sessions the SessionEnd hook missed are logged at --table and at SessionStart."""
 import contextlib
 import io
+import itertools
 import json
 import os
 import subprocess
@@ -42,14 +43,17 @@ def get_usage(tid):
     return {"type": "tool_use", "id": tid, "name": "mcp__ccd_session_mgmt__get_usage", "input": {}}
 
 
+IDS = itertools.count()  # message ids are unique across transcripts, as the API makes them (copies are recognised by id)
+
+
 def session_rows(calls, readings=()):
     """`calls` lead calls; the first and the last carry a get_usage call with the given readings (one reading: the first only)."""
     rows = [{"type": "user", "message": {"role": "user", "content": "go"}}]
     for i in range(calls):
-        rows.append(call("m%d" % i))
+        rows.append(call("m%d" % next(IDS)))
     for n, pct in enumerate(readings):
         tid = "toolu_usage%d" % n
-        rows.insert(1 + n * (calls - 1) if len(readings) > 1 else 1, call("u%d" % n, [get_usage(tid)]))
+        rows.insert(1 + n * (calls - 1) if len(readings) > 1 else 1, call("u%d" % next(IDS), [get_usage(tid)]))
         rows.insert(2 + n * (calls - 1) if len(readings) > 1 else 2, usage_result(pct, tid))
     return rows
 

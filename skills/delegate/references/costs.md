@@ -6,19 +6,20 @@ Not loaded automatically. `SKILL.md` keeps the rules; this file keeps the number
 
 The user works on a Claude Max subscription, not on API billing. The limit (a 5-hour window and a weekly allowance, shown by `/usage`) is consumed roughly in proportion to API list prices, so the API-equivalent $ printed by `scripts/agent_cost.py` is the best available proxy. Anthropic does not publish the exact formula, so the metrics file keeps the weekly all-models % before and after each stage (`usage_before`, `usage_after`) and `agent_cost.py` prints the resulting `limit calibration` (%/$). Several stages of that line are the real exchange rate; until then the $ figures are relative, not absolute. The desktop app exposes the limits to the lead as the `get_usage` tool (5-hour window, weekly all models, weekly per model); the terminal shows them with `/usage`.
 
-## Limit calibration (measured 2026-10-12, Max plan, desktop app)
+## Limit calibration (measured 2026-10-12, recomputed 2026-10-13 without copied calls; Max plan, desktop app)
 
-Every `get_usage` reading in the transcripts of 2026-10-08 → 10-12 was lined up against the cumulative API-equivalent $ of every session and subagent up to that moment (`agent_cost` prices). The weekly all-models meter went 46% → 88% over $652 of transcript-$: about $15.5 per 1%, so 100% of the week ≈ $1,500 at this mix. The rate depends on the model mix:
+Every `get_usage` reading in the transcripts was lined up against the cumulative API-equivalent $ of every session and subagent up to that moment (`agent_cost` prices), each API call counted once by its message id. The first version (10-12) counted the calls that a continued or forked conversation copies into its new transcript twice; that inflated the Fable intervals most ($116 → $71 in one). From 10-08 22:00 to the reset on 10-12 15:00Z the weekly all-models meter went 48% → 90% over $566: about $13.5 per 1%, so 100% of the week ≈ $1,350 at that mix (≈ $1,650 at the Opus-heavy mix after the reset). The rate depends on the model mix:
 
 | Interval (UTC) | Meter | Transcript $ in the interval (by model) | $ per 1% |
 |---|---|---|---|
 | 10-08 22:00 → 23:33 | +2% | $50 (Sonnet 30, Opus 20) | 25 |
-| 10-08 23:33 → 10-09 17:23 | +11% | $280 (Sonnet 175, Opus 72, Fable 33) | 25.5 |
-| 10-10 12:44 → 10-11 01:23 | +10% | $116 (Fable 112, Opus 4) | 11.6 |
-| 10-11 01:23 → 11:10 (one Fable session) | +6% | $66 (Fable 59, Sonnet 5) | 10.9 |
-| 10-11 13:01 → 10-12 10:34 | +2% | $27 (Fable 17, Opus 10) | 13.4 |
+| 10-08 23:33 → 10-09 17:23 | +11% | $257 (Sonnet 175, Opus 59, Fable 22) | 23.4 |
+| 10-10 12:38 → 10-11 01:23 | +10% | $71 (Fable 65, Opus 6) | 7.1 |
+| 10-11 01:23 → 11:10 (one Fable session) | +6% | $73 (Fable 61, Opus 7, Sonnet 5) | 12.2 |
+| 10-11 12:33 → 10-12 10:34 | +2% | $37 (Fable 20, Opus 15, Sonnet 2) | 18 |
+| 10-12 15:07 → 10-13 11:08 (after the weekly reset) | +8% | $133 (Opus 90, Sonnet 25, Fable 18) | 16.6 |
 
-Reading: Opus/Sonnet work costs the limit about $25 per 1%, Fable work about $11 per 1%, so per API-equivalent dollar Fable consumes the weekly allowance ~2.3× faster than Opus 5.5; per token, with the 2.5× price on top, a Fable token costs the limit 5–6× an Opus token. The Fable meter itself moved 22% → 34% for $59 of Fable work: that per-model allowance is worth ≈ $500. Caveat: usage outside Claude Code (claude.ai chat) in the same window would inflate the Fable intervals somewhat; the single-session interval is the cleanest point. Since the rework (10-09 22:00 → 10-12 11:00) the meter rose 61% → 88% for $289, of which Fable $208 (72%), Opus $62, Sonnet $19.
+Reading: Opus/Sonnet work costs the limit about $19–25 per 1% (the low end after the reset, taking Fable at $9), Fable work about $7–12 per 1% (two Fable-only intervals: 16% for $144, ≈ $9), so per API-equivalent dollar Fable consumes the weekly allowance ~2.4× faster than Opus 5.5; per token, with the 2.5× price on top, a Fable token costs the limit about 6× an Opus token. The Fable meter moved 22% → 34% for $59 of Fable work on 10-11 and 0% → 4% for $17.6 after the reset: that per-model allowance is worth ≈ $450–500. The meter shows whole percents, so a single interval of +1–2% carries ±50% error; read the long intervals. Usage outside Claude Code (claude.ai chat) in the same window also lands in the meter.
 
 Hidden thinking: a lead's output tokens are 55–79% invisible thinking (output minus the visible text, thinking and tool-input characters at 4 chars/token): Fable 63–73% (53f065d2: 1.09M output tokens, ~695k hidden ≈ $35), Opus at `max` 56–79%. On Opus output is a small share of a session (01a6213c: $1.9 of $8.3); on Fable it is about half (53f065d2: $54 of $107; 52322d0f: $36 of $68), so effort matters for a Fable lead far more than for Opus.
 

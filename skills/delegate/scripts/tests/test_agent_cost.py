@@ -408,6 +408,72 @@ class CalibrationTest(unittest.TestCase):
         self.assertEqual(self.usage_cells(), ("31", "38"))
 
 
+class CopiedCallsTest(unittest.TestCase):
+    """Continuing or forking a conversation repeats the parent's rows in a new transcript: each call must count once."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = tmp.name  # stands for the projects dir: one sub-directory per project
+
+    def transcript(self, project, name, calls):
+        """calls: (message id, minute after 10:00 UTC) pairs, one U2 call each."""
+        return write(os.path.join(self.root, project, name + ".jsonl"),
+                     [dict(assistant(mid, [], U2), timestamp="2026-10-13T10:%02d:00.000Z" % minute) for mid, minute in calls])
+
+    def test_a_fork_counts_only_its_own_calls_and_the_parent_keeps_all_of_its(self):
+        parent = self.transcript("Projects-A", "aaaa", [("msg_%d" % i, i) for i in range(5)])
+        child = self.transcript("Projects-A", "bbbb", [("msg_2", 2), ("msg_3", 3), ("msg_4", 4), ("msg_c1", 20), ("msg_c2", 21)])
+        self.assertEqual(agent_cost.copied_ids(parent), set())
+        a = agent_cost.analyze(child, agent_cost.copied_ids(child))
+        self.assertEqual((a["calls"], a["copied"]), (2, 3))
+        P = agent_cost.PRICES["sonnet-5"]
+        self.assertAlmostEqual(a["usd"], usd(P, U2, U2))
+        self.assertAlmostEqual(a["copied_usd"], usd(P, U2, U2, U2))
+        self.assertEqual(agent_cost.analyze(parent, agent_cost.copied_ids(parent))["calls"], 5)
+
+    def test_a_fork_written_under_another_project_is_found(self):
+        self.transcript("Projects-A", "aaaa", [("msg_1", 1), ("msg_2", 2)])
+        child = self.transcript("Projects-B", "bbbb", [("msg_2", 2), ("msg_c", 30)])
+        self.assertEqual(agent_cost.copied_ids(child), {"msg_1", "msg_2"})
+
+    def test_an_exact_copy_is_counted_once(self):
+        calls = [("msg_%d" % i, i) for i in range(4)]
+        a, b = self.transcript("Projects-A", "aaaa", calls), self.transcript("Projects-A", "bbbb", calls)
+        self.assertEqual(sorted(agent_cost.analyze(p, agent_cost.copied_ids(p))["calls"] for p in (a, b)), [0, 4])
+
+    def test_an_id_quoted_in_an_older_transcripts_tool_output_is_not_a_copy(self):
+        child = self.transcript("Projects-A", "bbbb", [("msg_x", 30), ("msg_y", 31)])
+        write(os.path.join(self.root, "Projects-A", "aaaa.jsonl"),
+              [dict(assistant("msg_old", [], U2), timestamp="2026-10-13T10:00:00.000Z"),
+               tool_result("toolu_1", json.dumps({"type": "assistant", "message": {"id": "msg_x"}}))])
+        self.assertEqual(agent_cost.copied_ids(child), set())
+
+    def test_an_older_transcript_not_written_since_this_one_began_is_not_read(self):
+        parent = self.transcript("Projects-A", "aaaa", [("msg_1", 1), ("msg_2", 2)])
+        child = self.transcript("Projects-A", "bbbb", [("msg_2", 2), ("msg_c", 30)])
+        began = calendar.timegm(time.strptime("2026-10-13T10:02:00", "%Y-%m-%dT%H:%M:%S"))
+        os.utime(parent, (began - 3600, began - 3600))
+        self.assertEqual(agent_cost.copied_ids(child), set())
+
+    def test_logging_a_fork_writes_only_its_own_calls_and_corrects_an_old_row(self):
+        self.transcript("Projects-A", "aaaa", [("msg_%d" % i, i) for i in range(40)])
+        child = self.transcript("Projects-A", "bbbb1234", [("msg_%d" % i, i) for i in range(5, 40)] + [("msg_c", 50)])
+        metrics = os.path.join(self.root, "delegate-metrics.tsv")
+        with mock.patch.object(agent_cost, "METRICS", metrics), contextlib.redirect_stdout(io.StringIO()):
+            agent_cost.log_metrics(child, agent_cost.analyze(child), [])  # the row as logged before the fix: 36 calls
+            self.assertTrue(agent_cost.log_if_substantial(child))  # 1 own call, below MIN_LEAD_CALLS, but it has a row
+            row = agent_cost.logged_row(child)
+        self.assertEqual((row["lead_calls"], row["lead_usd"]), ("1", "%.2f" % usd(agent_cost.PRICES["sonnet-5"], U2)))
+
+    def test_the_cli_says_what_it_left_out(self):
+        self.transcript("Projects-A", "aaaa", [("msg_1", 1), ("msg_2", 2)])
+        child = self.transcript("Projects-A", "bbbb", [("msg_2", 2), ("msg_c", 30)])
+        out = run_cli(child).stdout
+        self.assertIn("calls 1 |", out)
+        self.assertIn("not counted here: 1 calls", out)
+
+
 class SubagentHelpersTest(unittest.TestCase):
     """find_subagent and summarize_agent: what the hooks use to put a subagent's cost into the lead's context."""
 

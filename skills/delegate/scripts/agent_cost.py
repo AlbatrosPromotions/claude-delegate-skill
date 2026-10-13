@@ -104,9 +104,12 @@ def cost(u, model):
     return sum(t * p for t, p in zip(tokens, price_for(model))) / 1e6 if any(tokens) else 0.0
 
 
-def analyze(path):
+def analyze(path, skip=frozenset()):
+    """The lead's (or a subagent's) numbers; calls whose message id is in `skip` (copied from an older transcript, see
+    copied_ids) are left out of calls, context and $, and counted in copied/copied_usd instead."""
     rows = load(path)
     seen, calls, model = set(), [], None
+    copied = []  # (usage, model) of the calls left out
     call_models = []  # message.model of each counted call, parallel to calls
     uses, sizes, order, issued = {}, {}, [], {}
     failed = set()  # tool_use ids whose result is an error; a failed Agent call (unknown agent type, denied) has no transcript
@@ -115,6 +118,11 @@ def analyze(path):
         m = r.get("message") or {}
         if r.get("type") == "assistant":
             model = m.get("model") or model
+            if m.get("id") in skip:  # a copied call: its tokens, tools and usage readings count in the older transcript
+                if m.get("id") not in seen and m.get("usage"):
+                    seen.add(m.get("id"))
+                    copied.append((m["usage"], m.get("model") or model or "?"))
+                continue
             if m.get("id") not in seen and m.get("usage"):
                 seen.add(m.get("id"))
                 calls.append(m["usage"])
@@ -158,6 +166,8 @@ def analyze(path):
         "cache_write": sum(u.get("cache_creation_input_tokens", 0) for u in calls),
         "output": sum(u.get("output_tokens", 0) for u in calls),
         "usd": sum(cost(u, cm or model or "?") for u, cm in zip(calls, call_models)),
+        "copied": len(copied),
+        "copied_usd": sum(cost(u, cm) for u, cm in copied),
         "usage_readings": readings,
         "agent_calls": len({t for t in order if uses[t][0] in AGENT_TOOLS and t not in failed}),
         "by_tool": dict(by_tool),
@@ -166,6 +176,62 @@ def analyze(path):
                               sizes.get(t, 0), issued[t] + 1, uses[t][0], uses[t][1]) for t in order), reverse=True),
         "repeats": [(uses_key[0], len(v), sum(v), json.loads(uses_key[1])) for uses_key, v in repeats.items() if len(v) > 1],
     }
+
+
+def first_call(path):
+    """(timestamp, message id) of the transcript's first API call, else None."""
+    with open(path, encoding="utf-8", errors="replace") as f:
+        for line in f:
+            if '"usage"' not in line:
+                continue
+            try:
+                r = json.loads(line)
+            except ValueError:
+                continue
+            m = r.get("message") if isinstance(r, dict) else None
+            if r.get("type") == "assistant" and isinstance(m, dict) and m.get("id") and m.get("usage"):
+                return str(r.get("timestamp") or ""), str(m["id"])
+    return None
+
+
+def call_ids(path):
+    return {r["message"]["id"] for r in load(path) if isinstance(r, dict) and r.get("type") == "assistant"
+            and isinstance(r.get("message"), dict) and r["message"].get("id") and r["message"].get("usage")}
+
+
+def copied_ids(session):
+    """Message ids of the calls this transcript shares with an older transcript. Continuing or forking a conversation writes
+    a new transcript (sometimes under another project) that starts with the parent's rows, message ids included, so both
+    rows counted the same API calls (2026-10-13: 10 transcripts held $218 of copies). A call counts in the oldest transcript
+    holding it: the one whose first call is earlier (for an exact copy, the smaller path). Only transcripts that began
+    earlier and were still written after this one began are read, and only one whose text holds this transcript's first
+    call id as a JSON value is parsed (a quoted id inside a tool output is escaped and does not match)."""
+    session = os.path.abspath(session)
+    mine = first_call(session)
+    if not mine:
+        return set()
+    try:
+        began = calendar.timegm(time.strptime(mine[0][:19], "%Y-%m-%dT%H:%M:%S"))
+    except ValueError:
+        began = 0
+    needle = json.dumps(mine[1]).encode()
+    ids = set()
+    root = os.path.dirname(os.path.dirname(session))  # the projects dir: every project's transcripts
+    for other in glob.glob(os.path.join(glob.escape(root), "*", "*.jsonl")):
+        other = os.path.abspath(other)
+        try:
+            if other == session or os.path.getmtime(other) < began - 60:
+                continue
+            theirs = first_call(other)
+            if not theirs or (theirs[0], other) >= (mine[0], session):
+                continue
+            with open(other, "rb") as f:
+                if needle not in f.read():
+                    continue
+            ids |= call_ids(other)
+        except OSError:
+            continue
+    return ids
 
 
 def weekly_pct(content):
@@ -471,10 +537,11 @@ MIN_LEAD_CALLS = 30  # a shorter session without subagents is not worth a row (t
 
 
 def log_if_substantial(session, quiet=True):
-    """Log the session the way the SessionEnd hook does, when it had >= MIN_LEAD_CALLS lead calls or any subagent; True if logged."""
-    lead = analyze(session)
+    """Log the session the way the SessionEnd hook does, when it had >= MIN_LEAD_CALLS lead calls or any subagent, or already
+    has a row (a fork whose copied calls no longer count); True if logged."""
+    lead = analyze(session, copied_ids(session))
     subs = subagent_files(session)
-    if lead["calls"] < MIN_LEAD_CALLS and not subs:
+    if lead["calls"] < MIN_LEAD_CALLS and not subs and not logged_row(session):
         return False
     log_metrics(session, lead, [(read_meta(p), analyze(p)) for p in subs], quiet=quiet)
     return True
@@ -562,12 +629,15 @@ def main():
         print("note: --usage-before/--usage-after are stored only with --log", file=sys.stderr)
 
     session = resolve(args.path, args.previous)
-    lead = analyze(session)
+    lead = analyze(session, copied_ids(session))
     title = session_title(session)
     print("Session %s  (%s)%s" % (os.path.basename(session), lead["model"], '  "%s"' % title if title else ""))
     print("  calls %d | startup %s | final context %s | cache-read %s | cache-write %s | output %s | ~$%.2f | avg ctx/call %s" % (
         lead["calls"], k(lead["startup"]), k(lead["final"]), k(lead["cache_read"]), k(lead["cache_write"]), k(lead["output"]),
         lead["usd"], k(lead["avg_ctx"])))
+    if lead["copied"]:
+        print("  not counted here: %d calls ($%.2f) copied from an older transcript (a continued or forked conversation)"
+              % (lead["copied"], lead["copied_usd"]))
     if lead["usage_readings"]:
         print("  plan usage read in the session (weekly, all models): %s" % " -> ".join("%g%%" % r for r in lead["usage_readings"]))
     total_out = sum(v[1] for v in lead["by_tool"].values()) or 1

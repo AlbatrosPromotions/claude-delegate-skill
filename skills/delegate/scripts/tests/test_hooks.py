@@ -45,7 +45,7 @@ class HookTest(unittest.TestCase):
         self.session = self.make_session(3)
 
     def make_session(self, calls, name="abcdef12-0000"):
-        return write(os.path.join(self.dir, "Projects-Demo", name + ".jsonl"), [assistant("m%d" % i, SMALL) for i in range(calls)])
+        return write(os.path.join(self.dir, "Projects-Demo", name + ".jsonl"), [assistant("%s-m%d" % (name, i), SMALL) for i in range(calls)])  # message ids are unique across transcripts, as the API makes them
 
     def add_agent(self, agent="x", calls=2, meta=None, model=HAIKU, session=None):
         """A subagent transcript with 2 calls (U1, U2) by default; meta=None writes no meta.json."""
@@ -120,6 +120,63 @@ class PostToolUseTest(HookTest):
     def test_text_that_is_not_ascii_survives(self):
         self.add_agent(meta=dict(self.META, description="Xodimlar holati — статус"))
         self.assertIn('"Xodimlar holati — статус"', self.context(self.post(tool_use_id="toolu_X"), "PostToolUse"))
+
+
+class ContextNudgeTest(HookTest):
+    OPUS = "claude-opus-5-5"
+
+    def lead(self, *contexts):
+        """The lead's transcript: one call per context size (tokens re-read from the cache)."""
+        write(self.session, [assistant("n%d" % i, {"input_tokens": 0, "cache_creation_input_tokens": 0, "cache_read_input_tokens": c,
+                                                   "output_tokens": 100}, self.OPUS) for i, c in enumerate(contexts)])
+
+    def nudge(self, tool="Bash", **fields):
+        payload = json.dumps(self.event("PostToolUse", tool_name=tool, tool_use_id="toolu_N", tool_input={}, tool_response={}, **fields))
+        return subprocess.run([sys.executable, HOOKS, "context"], input=payload, capture_output=True, encoding="utf-8",
+                              env=dict(os.environ, CLAUDE_CONFIG_DIR=self.config, PYTHONIOENCODING="utf-8", PYTHONDONTWRITEBYTECODE="1"))
+
+    def test_silent_below_300k(self):
+        self.lead(150000, 299999)
+        self.assertSilent(self.nudge())
+
+    def test_once_at_300k_then_at_every_further_100k(self):
+        self.lead(150000, 320000)
+        text = self.context(self.nudge(), "PostToolUse")
+        self.assertEqual(text, agent_cost_free_nudge(320, 320000 * agent_cost.PRICES["opus-5-5"][2] / 1e6))
+        self.lead(150000, 320000, 390000)
+        self.assertSilent(self.nudge())  # the same 300k step
+        self.lead(150000, 320000, 390000, 410000)
+        self.assertIn("410k tokens", self.context(self.nudge(), "PostToolUse"))
+
+    def test_after_a_compaction_passing_300k_again_is_told_again(self):
+        self.lead(420000)
+        self.context(self.nudge(), "PostToolUse")
+        self.lead(420000, 90000, 310000)
+        self.assertIn("310k tokens", self.context(self.nudge(), "PostToolUse"))
+
+    def test_never_inside_a_subagent(self):
+        self.lead(500000)
+        self.assertSilent(self.nudge(agent_id="a1", agent_type="sonnet-coder"))
+
+    def test_the_agent_tool_gets_only_the_nudge_not_a_second_cost_line(self):
+        self.lead(100000)
+        self.add_agent(meta={"agentType": "sonnet-scout", "description": "scan", "toolUseId": "toolu_N"})
+        self.assertSilent(self.nudge(tool="Agent"))
+
+    def test_without_the_argument_the_hook_does_not_nudge(self):
+        self.lead(500000)
+        self.assertSilent(self.run_hook(self.event("PostToolUse", tool_name="Bash", tool_use_id="toolu_N")))
+
+    def test_the_hook_config_has_the_context_group(self):
+        with open(os.path.join(os.path.dirname(SCRIPTS), "references", "settings-hooks.json"), encoding="utf-8") as f:
+            groups = json.load(f)["hooks"]["PostToolUse"]
+        self.assertIn(("*", True), [(g.get("matcher"), g["hooks"][0]["command"].endswith(" context")) for g in groups])
+
+
+def agent_cost_free_nudge(k, per_call):
+    sys.path.insert(0, SCRIPTS)
+    import hooks
+    return hooks.NUDGE % (k, per_call)
 
 
 class UserPromptSubmitTest(HookTest):

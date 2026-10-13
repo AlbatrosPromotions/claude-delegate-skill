@@ -11,7 +11,7 @@ Quality first, then the usage limit. The budget is a Claude Max subscription, no
 
 - Every call re-sends the whole context: a session costs about context size × calls; the lead's context is the dearest.
 - A fresh subagent's startup (system prompt, tools, CLAUDE.md, brief) is ~4–12k tokens for the lean agents below, ~50k+ for `general-purpose`, `Explore` or `Plan`. A fork copies the lead's whole conversation.
-- Output (thinking included) costs 5× input per token; 55–75% of a lead's output is hidden thinking. Measured 2026-10-12: 1% of the weekly allowance ≈ $25 of Opus/Sonnet work but ≈ $11 of Fable work. A Fable lead plans and reviews; bulk reading and bulk writing are not its job.
+- Output (thinking included) costs 5× input per token; 55–75% of a lead's output is hidden thinking. Measured 2026-10-13: 1% of the weekly allowance ≈ $19–25 of Opus/Sonnet work but ≈ $7–12 of Fable work. A Fable lead plans and reviews; bulk reading and bulk writing are not its job.
 - Delegation is not free: in EDMS stages 5–8 the workers cost what the lead saved. It pays only when workers stay short and the lead small. Numbers: `references/costs.md`.
 
 ## Who does what
