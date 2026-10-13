@@ -179,6 +179,69 @@ def agent_cost_free_nudge(k, per_call):
     return hooks.NUDGE % (k, per_call)
 
 
+class TurnWarningTest(HookTest):
+    """Inside a subagent the context hook counts the subagent's calls against the maxTurns of its definition."""
+    OPUS, lead, nudge = ContextNudgeTest.OPUS, ContextNudgeTest.lead, ContextNudgeTest.nudge
+
+    def define(self, agent_type="sonnet-coder", max_turns=120, root=None):
+        path = os.path.join(root or self.config, *([".claude"] if root else []), "agents", agent_type + ".md")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("---\nname: %s\nmodel: sonnet\n%s---\n\nYou are a worker. maxTurns: 999 in the body does not count.\n" % (
+                agent_type, "maxTurns: %d\n" % max_turns if max_turns else ""))
+
+    def worker(self, calls, agent="c1", agent_type="sonnet-coder", **fields):
+        """The subagent has made `calls` API calls (the last one split over two rows, as Claude Code writes a reply); then
+        one of its tool calls finishes."""
+        rows = [assistant("w%d" % i, SMALL) for i in range(calls)]
+        write(os.path.join(os.path.splitext(self.session)[0], "subagents", "agent-%s.jsonl" % agent), rows + rows[-1:])
+        return self.nudge(agent_id=agent, agent_type=agent_type, **fields)
+
+    def test_silent_while_more_than_a_sixth_of_the_turns_is_left(self):
+        self.define()
+        self.assertSilent(self.worker(99))
+
+    def test_warns_at_100_of_120_then_once_more_3_before_the_cap(self):
+        self.define()
+        self.lead(500000)  # the lead's own nudge never shows inside a subagent
+        sys.path.insert(0, SCRIPTS)
+        import hooks
+        self.assertEqual(self.context(self.worker(100), "PostToolUse"), hooks.TURN_WARN % (100, 120, 120, 17))
+        self.assertSilent(self.worker(110))
+        self.assertEqual(self.context(self.worker(117), "PostToolUse"), hooks.TURN_LAST % (117, 120, 3))
+        self.assertSilent(self.worker(119))
+
+    def test_each_subagent_is_warned_on_its_own(self):
+        self.define(agent_type="sonnet-scout", max_turns=40)  # a sixth of 40: warned with 6 left
+        self.assertSilent(self.worker(33, agent="s1", agent_type="sonnet-scout"))
+        self.assertIn("34 of your 40 turns", self.context(self.worker(34, agent="s1", agent_type="sonnet-scout"), "PostToolUse"))
+        self.assertIn("34 of your 40 turns", self.context(self.worker(34, agent="s2", agent_type="sonnet-scout"), "PostToolUse"))
+
+    def test_a_small_cap_gets_only_the_last_line(self):
+        self.define(max_turns=12)
+        self.assertSilent(self.worker(8))
+        self.assertIn("Deliver your final report now", self.context(self.worker(9), "PostToolUse"))
+
+    def test_a_project_agent_wins_over_the_user_agent(self):
+        self.define(max_turns=120)
+        self.define(max_turns=30, root=self.dir)  # <cwd>/.claude/agents/sonnet-coder.md; the event's cwd is self.dir
+        self.assertIn("25 of your 30 turns", self.context(self.worker(25), "PostToolUse"))
+
+    def test_the_event_may_carry_the_subagent_transcript_itself(self):
+        self.define()
+        self.worker(10)
+        own = os.path.join(os.path.splitext(self.session)[0], "subagents", "agent-c1.jsonl")
+        write(own, [assistant("v%d" % i, SMALL) for i in range(101)])
+        self.assertIn("101 of your 120", self.context(self.nudge(agent_id="c1", agent_type="sonnet-coder", transcript_path=own), "PostToolUse"))
+
+    def test_no_definition_no_max_turns_or_a_strange_type_is_silent(self):
+        self.define(agent_type="no-cap", max_turns=None)
+        for agent_type in ("general-purpose", "no-cap", "../agents/sonnet-coder", "plugin:coder", None):
+            self.assertSilent(self.worker(200, agent_type=agent_type))
+        self.define()
+        self.assertSilent(self.nudge(agent_id="missing", agent_type="sonnet-coder"))  # no transcript yet
+
+
 class UserPromptSubmitTest(HookTest):
     NOTE = ("<task-notification>\n<task-id>x</task-id>\n<tool-use-id>toolu_X</tool-use-id>\n<output-file>/tmp/x.output</output-file>\n"
             "<status>completed</status>\n<summary>Agent \"scan the repo\" finished</summary>\n<result>done</result>\n</task-notification>")
@@ -212,6 +275,45 @@ class UserPromptSubmitTest(HookTest):
     def test_an_agent_id_cannot_leave_the_subagents_directory(self):
         write(os.path.join(os.path.splitext(self.session)[0], "subagents", "agent-q", "z.jsonl"), [assistant("m1", SMALL), assistant("m2", SMALL)])
         self.assertSilent(self.prompt("<task-notification>\n<task-id>q/z</task-id>\n</task-notification>"))
+
+
+class PromptNudgeTest(HookTest):
+    OPUS, prompt = "claude-opus-5-5", UserPromptSubmitTest.prompt
+
+    def lead(self, *contexts):
+        write(self.session, [assistant("p%d" % i, {"input_tokens": 0, "cache_creation_input_tokens": 0, "cache_read_input_tokens": c,
+                                                   "output_tokens": 100}, self.OPUS) for i, c in enumerate(contexts)])
+
+    def test_a_request_past_300k_is_told_once_per_100k(self):
+        self.lead(150000, 320000)
+        sys.path.insert(0, SCRIPTS)
+        import hooks
+        per_call = 320000 * agent_cost.PRICES["opus-5-5"][2] / 1e6
+        self.assertEqual(self.context(self.prompt("now the pgAdmin domain"), "UserPromptSubmit"), hooks.PROMPT_NUDGE % (320, per_call, 320))
+        self.assertSilent(self.prompt("and merge it"))
+        self.lead(150000, 320000, 410000)
+        self.assertIn("this chat is at 410k", self.context(self.prompt("one more fix"), "UserPromptSubmit"))
+
+    def test_below_300k_nothing(self):
+        self.lead(299999)
+        self.assertSilent(self.prompt("next request"))
+
+    def test_the_tool_call_nudge_does_not_use_up_the_prompt_nudge(self):
+        self.lead(320000)
+        p = subprocess.run([sys.executable, HOOKS, "context"], input=json.dumps(self.event("PostToolUse", tool_name="Bash")),
+                           capture_output=True, encoding="utf-8", env=dict(os.environ, CLAUDE_CONFIG_DIR=self.config, PYTHONDONTWRITEBYTECODE="1"))
+        self.assertIn("tell the user in one line", self.context(p, "PostToolUse"))
+        self.assertIn("this chat is at 320k", self.context(self.prompt("next request"), "UserPromptSubmit"))
+
+    def test_prompts_no_user_wrote_get_nothing(self):
+        self.lead(500000)
+        self.assertSilent(self.prompt("Another Claude session sent a message: <agent-message from=\"a1\"> [Subagent hand-back] done"))
+        self.assertSilent(self.prompt("<ci-monitor-event>checks failed</ci-monitor-event>"))
+        self.assertSilent(self.prompt("<task-notification>\n<task-id>bq1w3z</task-id>\n</task-notification>"))  # not ours: no cost line either
+        self.assertIn("this chat is at 500k", self.context(self.prompt("a real request"), "UserPromptSubmit"))
+
+    def test_a_missing_transcript_stays_silent(self):
+        self.assertSilent(self.run_hook(self.event("UserPromptSubmit", prompt="hi", transcript_path=os.path.join(self.dir, "nope.jsonl"))))
 
 
 class SessionEndTest(HookTest):

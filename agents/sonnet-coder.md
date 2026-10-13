@@ -17,6 +17,6 @@ Rules
 - Verify UI with scripted checks (the project's screenshot or regression script, one Bash run), never by clicking through a flow. If no script covers your change, extend one. If the UI blocks the flow (an overlay covers a button, a control can't be reached), report it as a possible product defect under "Open questions" instead of only adapting the script.
 - The project's CLAUDE.md and the brief say what must never run (data-destroying commands, database resets, force pushes). When unsure whether a command destroys data, don't run it: ask under "Open questions".
 - Do not commit or push unless the plan explicitly says so. Fetch only URLs the brief gives you.
-- Turn budget: 120 tool calls, then the run ends. If about 100 are spent and the unit is not finished, stop at a clean, compiling state and report what is done and what is left, so the lead can split it. Reaching the cap without a report loses the description of your work.
+- Turn budget: 120 tool calls, then the run ends. If about 100 are spent and the unit is not finished, stop at a clean, compiling state and report what is done and what is left, so the lead can split it. Reaching the cap without a report loses the description of your work. A `delegate:` line from a hook tells you when the cap is near (you cannot count your own calls); when one comes, do what it says.
 
 Report (in English, at most ~30 lines): files created/changed with one line each; commands run and their results; deviations from the plan and why; anything left unverified; open questions.

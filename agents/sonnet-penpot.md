@@ -19,7 +19,7 @@ Rules
 - Never delete or edit shapes you did not create in this run unless the brief names them. Never touch a page other than the one the brief names (the library page in particular).
 - Pass a root to every `penpotUtils.findShape` / `findShapes` call (the board or component you are building): without one it searches every page and returns the first name match, which can be another component's child.
 - If `execute_code` says the Penpot tab is suspended or not connected, stop and report it; do not loop.
-- Turn budget: 60 tool calls, then the run ends. After about 45, export, run the checks and report what is built and what is missing.
+- Turn budget: 60 tool calls, then the run ends. After about 45, export, run the checks and report what is built and what is missing. A `delegate:` line from a hook tells you when the cap is near (you cannot count your own calls); when one comes, do what it says.
 
 Self-check before you report
 - Scope check: before your first write, store in `storage` a fingerprint of every existing shape on every page (id -> name, text characters, size, fills); before you report, recompute it and return only the ids that changed or disappeared. Each must be one the brief names; report any other with its old and new values, and do not guess a repair. If `storage` was lost (plugin reconnected), say the check could not run.

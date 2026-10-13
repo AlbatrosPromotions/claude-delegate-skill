@@ -14,8 +14,10 @@ one JSON object on stdin; the only thing ever written to stdout is one JSON obje
                     stage comparison table) is refreshed
   PostToolUse       (matcher ^Agent$) a foreground subagent handed back: one "delegate-cost:" line for the lead
   PostToolUse       (matcher *, argument "context") the lead's context passed 300k, or a further 100k: one line with its size and
-                    what each further call re-reads, and the handoff rule; never inside a subagent
-  UserPromptSubmit  a background subagent's <task-notification> arrived: the same line; any other prompt: nothing, at once
+                    what each further call re-reads, and the handoff rule. Inside a subagent instead: the turn warning, once when
+                    about a sixth of its maxTurns is left and once more 3 turns before the cap: finish and report
+  UserPromptSubmit  a background subagent's <task-notification> arrived: the same line; a user's request in a chat past 300k
+                    (once per 100k): the lead tells the user the chat's size and offers a new chat; any other prompt: nothing
 
 It always exits 0: a measurement hook must never block or break a session. A problem is one line on stderr.
 """
@@ -59,8 +61,26 @@ NUDGE_FROM, NUDGE_STEP = 300000, 100000  # tokens. 2026-10-13: the ~200k handoff
 # spent $20 of its $38 after 466k. Below ~300k a fresh session's restart (~65k startup plus re-reading) costs about what it saves.
 TAIL = 512 * 1024  # bytes read from the end of the transcript to find the last call's usage
 NUDGE = ("delegate: your context is now %dk tokens, and every further call re-reads all of it (~$%.2f a call). At the next "
-         "natural boundary write the handoff note (done, next, decisions, open questions, usage before/after) and continue in a "
-         "fresh session; until then hand bulk reading and writing to subagents.")
+         "natural boundary (a unit done, a PR opened) write the handoff note (done, next, decisions, open questions, usage "
+         "before/after) and tell the user in one line to continue in a new chat from it; only the user can open one. Until then "
+         "hand bulk reading and writing to subagents.")
+# 2026-10-13 (e80047a3, 6fb889bb): NUDGE fired at 300k and 404k, yet the leads spent 53% and 52% of their $ after it, on new
+# requests the user sent into the same chat, and named a new chat only when asked "what next?". A new request is the boundary.
+PROMPT_NUDGE = ("delegate: the user is starting a new request in a chat whose context is %dk tokens; each call re-reads all of "
+                "it (~$%.2f a call). Before you start, tell the user in one line that this chat is at %dk and that a new chat "
+                "from a short handoff note would make every call several times cheaper, and offer to write the note; then do what "
+                "they choose. If the request is a quick follow-up on work in your context (a fix they just saw, a merge), do it "
+                "and put that line at the end of your answer instead.")
+MACHINE_PROMPTS = ("<task-notification>", "<agent-message", "<ci-monitor-event")  # arrive as prompts, but no user wrote them
+
+# 2026-10-13: the "report 10-20 calls before the cap" prompt rule did not hold: a sonnet-coder (e80047a3, overlay family) ran
+# into maxTurns 120 without a report, as 01a6213c's coder A had on 10-12; a model does not count its own calls.
+TURN_WARN = ("delegate: you have used %d of your %d turns; at %d the run ends and nothing you have not reported reaches the "
+             "lead. Start nothing new: bring the work to a clean state, run the checks you can, and deliver your final report "
+             "(done, left undone, checks run, open questions) within the next ~%d calls.")
+TURN_LAST = ("delegate: %d of your %d turns used, the run ends in %d. Deliver your final report now: done, left undone, checks "
+             "run, open questions.")
+TURN_LAST_LEFT = 3
 
 
 def last_context(path):
@@ -84,17 +104,9 @@ def last_context(path):
     return 0, None
 
 
-def context_nudge(event):
-    """The lead's context passed NUDGE_FROM, or a further NUDGE_STEP since the last line: the NUDGE line, once per step (after
-    a compaction the context falls, so passing a step again is told again). A tool call inside a subagent (agent_id set) is
-    skipped: the line is for the lead. The last step told is kept per transcript in delegate-nudge.json next to the metrics file."""
-    if event.get("agent_id"):
-        return None
-    session = session_of(event)
-    tokens, model = last_context(session)
-    if tokens < NUDGE_FROM:
-        return None
-    step = NUDGE_FROM + (tokens - NUDGE_FROM) // NUDGE_STEP * NUDGE_STEP
+def told(key, step):
+    """True the first time this step is told for key (a transcript, or a transcript plus a kind of line), False after that.
+    The last step told per key is kept in delegate-nudge.json next to the metrics file; a new step replaces it."""
     import agent_cost
     state_path = os.path.join(os.path.dirname(agent_cost.METRICS), "delegate-nudge.json")
     try:
@@ -103,16 +115,108 @@ def context_nudge(event):
         state = state if isinstance(state, dict) else {}
     except (OSError, ValueError):
         state = {}
-    if state.get(session) == step:
-        return None
-    state.pop(session, None)
-    state[session] = step
-    state = dict(list(state.items())[-200:])  # the newest 200 transcripts are enough
+    if state.get(key) == step:
+        return False
+    state.pop(key, None)
+    state[key] = step
+    state = dict(list(state.items())[-200:])  # the newest 200 keys are enough
     tmp = "%s.%d.tmp" % (state_path, os.getpid())
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(state, f)
     os.replace(tmp, state_path)
-    return NUDGE % (tokens // 1000, tokens * agent_cost.price_for(model or "")[2] / 1e6)
+    return True
+
+
+def context_step(path):
+    """(step, tokens, $ a call) once the transcript's last call passed NUDGE_FROM, else None; the step is NUDGE_FROM plus whole
+    NUDGE_STEPs (after a compaction the context falls, so passing a step again is told again)."""
+    tokens, model = last_context(path)
+    if tokens < NUDGE_FROM:
+        return None
+    import agent_cost
+    return NUDGE_FROM + (tokens - NUDGE_FROM) // NUDGE_STEP * NUDGE_STEP, tokens, tokens * agent_cost.price_for(model or "")[2] / 1e6
+
+
+def context_nudge(event):
+    """The lead's context passed NUDGE_FROM, or a further NUDGE_STEP since the last line: the NUDGE line, once per step. A tool
+    call inside a subagent (agent_id set) gets the turn warning instead: the NUDGE line is for the lead."""
+    if event.get("agent_id"):
+        return turn_warning(event)
+    session = session_of(event)
+    at = context_step(session)
+    return NUDGE % (at[1] // 1000, at[2]) if at and told(session, at[0]) else None
+
+
+def prompt_nudge(event, prompt):
+    """A request the user typed into a chat past NUDGE_FROM: PROMPT_NUDGE, once per step, apart from the tool-call NUDGE (which
+    the lead has usually seen by then, without telling the user). Prompts no user wrote, and events without a transcript,
+    get nothing: a prompt must never wait on, or fail for, bookkeeping."""
+    if any(tag in prompt for tag in MACHINE_PROMPTS):
+        return None
+    path = os.path.expanduser(str(event.get("transcript_path") or ""))
+    if not path.endswith(".jsonl") or not os.path.isfile(path):
+        return None
+    at = context_step(path)
+    return PROMPT_NUDGE % (at[1] // 1000, at[2], at[1] // 1000) if at and told(path + "#prompt", at[0]) else None
+
+
+def max_turns(agent_type, cwd):
+    """maxTurns from the agent's definition, <cwd>/.claude/agents/<type>.md before the user's agents directory (a project agent
+    wins, as in Claude Code); None for a built-in or plugin agent, or a definition without maxTurns."""
+    if not re.fullmatch(r"[\w-]+", str(agent_type or "")):  # no file for built-in or plugin agents; nothing may leave the dir
+        return None
+    import agent_cost
+    dirs = ([os.path.join(str(cwd), ".claude", "agents")] if cwd else []) + [os.path.join(os.path.dirname(agent_cost.METRICS), "agents")]
+    for d in dirs:
+        try:
+            with open(os.path.join(d, agent_type + ".md"), encoding="utf-8") as f:
+                head = f.read(8192)
+        except OSError:
+            continue
+        front = re.match(r"---[ \t]*\n(.*?)\n---", head, re.S)
+        n = front and re.search(r"^maxTurns:\s*(\d+)\s*$", front.group(1), re.M)
+        return int(n.group(1)) if n else None
+    return None
+
+
+def api_calls(path):
+    """The API calls in a transcript so far: its assistant rows, one per message id (a reply split over rows shares one)."""
+    ids = set()
+    with open(path, encoding="utf-8", errors="replace") as f:
+        for i, line in enumerate(f):
+            if '"assistant"' not in line:
+                continue
+            try:
+                row = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(row, dict) and row.get("type") == "assistant":
+                m = row.get("message")
+                ids.add((m.get("id") if isinstance(m, dict) else None) or i)
+    return len(ids)
+
+
+def turn_warning(event):
+    """Inside a subagent: TURN_WARN once when about a sixth of its maxTurns is left (20 of a coder's 120), TURN_LAST once
+    TURN_LAST_LEFT turns before the cap. The subagent's transcript is the event's own or agent-<agent_id>.jsonl of the session."""
+    cap = max_turns(event.get("agent_type"), event.get("cwd"))
+    if not cap:
+        return None
+    path = os.path.expanduser(str(event.get("transcript_path") or ""))
+    if not os.path.basename(path).startswith("agent-"):
+        import agent_cost
+        _meta, path = agent_cost.find_subagent(session_of(event), agent_id=event.get("agent_id"))
+    if not path or not os.path.isfile(path):
+        return None
+    calls = api_calls(path)
+    left = cap - calls
+    if left <= TURN_LAST_LEFT:
+        step, text = "last", TURN_LAST % (calls, cap, max(left, 0))
+    elif left <= cap // 6:
+        step, text = "warn", TURN_WARN % (calls, cap, cap, left - TURN_LAST_LEFT)
+    else:
+        return None
+    return text if told(path, step) else None
 
 
 def session_start(event):
@@ -150,7 +254,7 @@ def post_tool_use(event):
 def user_prompt_submit(event):
     prompt = str(event.get("prompt") or "")
     if "<task-notification>" not in prompt:
-        return None
+        return prompt_nudge(event, prompt)
     tool_use_id, task_id = (re.search(r"<%s>\s*([^<\s]+)\s*</%s>" % (tag, tag), prompt) for tag in ("tool-use-id", "task-id"))
     if tool_use_id or task_id:
         return agent_line(event, tool_use_id and tool_use_id.group(1), task_id and task_id.group(1))
