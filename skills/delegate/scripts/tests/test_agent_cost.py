@@ -100,6 +100,14 @@ class AnalyzeTest(unittest.TestCase):
         self.assertEqual(a["agent_calls"], 1)
         self.assertAlmostEqual(a["usd"], usd(agent_cost.PRICES["sonnet-5"], U1, U2, U3), places=9)
 
+    def test_a_one_hour_cache_write_costs_twice_the_input_price(self):
+        # the lead's writes are 1-hour (2x input), a subagent's 5-minute (1.25x); a usage without the split stays at 1.25x
+        u = dict(usage(0, 300000, 0, 0), cache_creation={"ephemeral_5m_input_tokens": 100000, "ephemeral_1h_input_tokens": 200000})
+        self.assertAlmostEqual(agent_cost.cost(u, "claude-opus-5-5"), (100000 * 5 + 200000 * 8) / 1e6, places=9)
+        self.assertAlmostEqual(agent_cost.cost(usage(0, 300000, 0, 0), "claude-opus-5-5"), 300000 * 5 / 1e6, places=9)
+        bad = dict(usage(0, 1000, 0, 0), cache_creation={"ephemeral_1h_input_tokens": 5000})  # never more than the write itself
+        self.assertAlmostEqual(agent_cost.cost(bad, "claude-opus-5-5"), 1000 * 8 / 1e6, places=9)
+
     def test_avg_ctx_is_the_mean_context_per_call(self):
         # input + cache write + cache read of each call: 401000, 450200, 450100
         self.assertAlmostEqual(self.analyze(lead_rows())["avg_ctx"], (401000 + 450200 + 450100) / 3, places=6)

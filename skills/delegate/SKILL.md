@@ -35,7 +35,7 @@ Quality first, then the usage limit. The budget is a Claude Max subscription, no
 
 - Independent units, each with its own acceptance check (backend vs frontend, separate screens, groups of articles). Keep together what must stay consistent: all languages of a text, a component and its tests.
 - Not below ~20–30k tokens of real work per worker (startup and your review dominate), not above ≈ 100 calls or a ~4k-character brief. A worker that reaches its turn cap stops and reports what it has: split the unit and respawn with a fresh brief.
-- Parallel workers never touch the same files; two coders in one checkout also share build caches, dev servers and the git index, so spawn them with `isolation: "worktree"` and merge each result yourself. Dependent steps run in sequence, the earlier result in the next brief.
+- Parallel workers never touch the same files; two coders in one checkout also share build caches, dev servers and the git index, so spawn them with `isolation: "worktree"` (it branches from your HEAD: commit first) and merge each result yourself. Dependent steps run in sequence, the earlier result in the next brief.
 - Shared code that workers build on (a shell component, a composable) must lint, test and compile before you spawn them.
 - Name shared conventions in every parallel brief: display formats (name order, dates, numbers), i18n keys, naming.
 

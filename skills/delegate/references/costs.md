@@ -25,7 +25,7 @@ Hidden thinking: a lead's output tokens are 55–79% invisible thinking (output 
 
 ## API list prices used by agent_cost.py ($ per million tokens, 2026-10-06)
 
-| Model | input | cache write (≈1.25×) | cache read | output |
+| Model | input | cache write, 5 min (1.25×) | cache read | output |
 |---|---|---|---|---|
 | Fable 5.1 | 10 | 12.5 | 0.25 | 50 |
 | Opus 5.5 | 4 | 5 | 0.20 | 20 |
@@ -33,6 +33,8 @@ Hidden thinking: a lead's output tokens are 55–79% invisible thinking (output 
 | Sonnet 5.5 / 5 | 2 | 2.5 | 0.20 | 10 |
 | Sonnet 4.6 | 3 | 3.75 | 0.30 | 15 |
 | Haiku 5.5 | 0.10 | 0.125 | 0.01 | 0.50 |
+
+A 1-hour cache write costs 2× input (Opus 5.5 $8, Sonnet 5.5 $4, Fable 5.1 $20). Claude Code writes the lead's cache with the 1-hour TTL and a subagent's with the 5-minute one; since 2026-10-14 `agent_cost.py` prices each part from `usage.cache_creation` and the metrics rows are re-logged at these prices. Before that every write counted at 1.25×, which hid ~9% of a stage's $ (31% of a Fable lead's): the calibration above was computed at the old prices, so its Fable rates are ~25–30% low. Measured at the new prices, 10-13 19:08Z → 10-14 17:11Z: 14% → 24% for $186 ($31 of it Fable): with Fable at ~2.7%, Opus/Sonnet ≈ $21 per 1%.
 
 What follows from the table:
 - Output costs 5× input on every model. Thinking is output, and in a long run output is a small share of the total (EDMS stage 8 lead: 129k output ≈ $2.6 against 49.5M cache reads ≈ $9.9). Effort is not only thinking, though: lower effort also means fewer, more consolidated tool calls, higher effort more exploration and verification calls, and calls × context is the biggest line. So an effort change must be judged by total $ and defects per stage, never by output tokens alone.

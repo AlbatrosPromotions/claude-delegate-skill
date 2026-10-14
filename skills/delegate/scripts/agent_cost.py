@@ -45,7 +45,7 @@ from collections import defaultdict
 
 CHARS_PER_TOKEN = 3.3  # rough average for code mixed with Uzbek/Russian text; used only for estimates
 
-# Anthropic API list prices, 2026-10-06; cache_write assumed 1.25x input
+# Anthropic API list prices, 2026-10-06; cache_write is the 5-minute write (1.25x input), a 1-hour write costs WRITE_1H x input
 # $ per million tokens: (input, cache_write, cache_read, output). Key = substring of the model id; the longest matching key wins.
 PRICES = {
     "fable": (10, 12.5, 0.25, 50),
@@ -56,6 +56,9 @@ PRICES = {
     "haiku-5-5": (0.10, 0.125, 0.01, 0.50),
     "haiku": (1, 1.25, 0.10, 5),
 }
+# Claude Code writes the lead's cache with the 1-hour TTL and a subagent's with the 5-minute one (every transcript of 10-14);
+# usage.cache_creation splits the two, and pricing both at 1.25x had hidden ~9% of a stage's $ (31% of a Fable lead's).
+WRITE_1H = 2.0
 UNPRICED = set()  # models already warned about
 AGENT_TOOLS = ("Agent", "Task")  # tool_use names with which a lead spawns a subagent
 
@@ -98,10 +101,15 @@ def price_for(model):
 
 
 def cost(u, model):
-    """API-equivalent dollars of one call's usage (a call with no tokens, e.g. a <synthetic> row, costs nothing)."""
+    """API-equivalent dollars of one call's usage (a call with no tokens, e.g. a <synthetic> row, costs nothing). The
+    1-hour part of the cache write (usage.cache_creation.ephemeral_1h_input_tokens) costs WRITE_1H x input, the rest 1.25x."""
     tokens = (u.get("input_tokens", 0), u.get("cache_creation_input_tokens", 0), u.get("cache_read_input_tokens", 0),
               u.get("output_tokens", 0))
-    return sum(t * p for t, p in zip(tokens, price_for(model))) / 1e6 if any(tokens) else 0.0
+    if not any(tokens):
+        return 0.0
+    price = price_for(model)
+    write_1h = min((u.get("cache_creation") or {}).get("ephemeral_1h_input_tokens") or 0, tokens[1])
+    return (sum(t * p for t, p in zip(tokens, price)) + write_1h * (WRITE_1H * price[0] - price[1])) / 1e6
 
 
 def analyze(path, skip=frozenset()):
