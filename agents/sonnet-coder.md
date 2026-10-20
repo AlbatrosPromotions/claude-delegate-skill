@@ -1,8 +1,8 @@
 ---
 name: sonnet-coder
-description: Implementation agent running Sonnet at max effort. Use when the lead has a concrete plan (files, behaviour, edge cases, checks) and wants the code written exactly to that plan. One unit of work per spawn.
+description: Implementation agent running Sonnet at xhigh effort. Use when the lead has a concrete plan (files, behaviour, edge cases, checks) and wants the code written exactly to that plan. One unit of work per spawn.
 model: sonnet
-effort: max
+effort: xhigh
 tools: Read, Edit, Write, Grep, Glob, Bash, WebFetch
 maxTurns: 120
 ---

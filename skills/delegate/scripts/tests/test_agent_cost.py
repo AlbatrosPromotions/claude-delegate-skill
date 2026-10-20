@@ -134,6 +134,32 @@ class AnalyzeTest(unittest.TestCase):
         P = agent_cost.PRICES
         self.assertAlmostEqual(a["usd"], usd(P["opus-5-5"], U1) + usd(P["haiku"], U2, U3), places=9)
 
+    def test_a_call_takes_the_usage_of_its_final_row(self):
+        # a streamed transcript writes each block with the usage of the stream's start; a later row may carry the final one
+        start, final = usage(2, 400000, 0, 8), usage(2, 400000, 0, 30000)
+        rows = [dict(assistant("m1", [{"type": "thinking", "thinking": ""}], start), message=dict(
+                    assistant("m1", [], start)["message"], stop_reason=None)),
+                dict(assistant("m1", [{"type": "text", "text": "hi"}], final), message=dict(
+                    assistant("m1", [{"type": "text", "text": "hi"}], final)["message"], stop_reason="end_turn"))]
+        a = self.analyze(rows)
+        self.assertEqual((a["calls"], a["output"], a["estimated"]), (1, 30000, 0))
+        self.assertAlmostEqual(a["usd"], usd(agent_cost.PRICES["sonnet-5"], final), places=9)
+
+    def test_output_of_a_call_with_only_streamed_rows_is_estimated_from_the_next_calls_growth(self):
+        def streamed(mid, content, u):
+            row = assistant(mid, content, u)
+            row["message"]["stop_reason"] = None
+            return row
+        result = "x" * 21000  # 10000 tokens at RESULT_CHARS_PER_TOKEN 2.1
+        rows = [streamed("m1", [tool_use("t1", "Bash", {"command": "ls"})], usage(2, 50000, 0, 8)),
+                tool_result("t1", result),
+                streamed("m2", [{"type": "text", "text": "y" * 3300}], usage(2, 15000, 50000, 5))]
+        a = self.analyze(rows)
+        # m1: the context grew 65002 - 50002 = 15000, of which 10000 is the tool result: 5000 output
+        # m2 is the last call: its shown text, 3300 chars at CHARS_PER_TOKEN 3.3 = 1000
+        self.assertEqual((a["output"], a["estimated"]), (6000, 2))
+        self.assertEqual(a["final"], 65002 + 1000)
+
     def test_longest_matching_key_wins(self):
         P = agent_cost.PRICES
         for model, key in (("claude-opus-5-5", "opus-5-5"), ("claude-opus-5-5-20261001", "opus-5-5"), ("claude-opus-4-1", "opus"),

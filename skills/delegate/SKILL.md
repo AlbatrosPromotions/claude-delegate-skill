@@ -11,8 +11,8 @@ Quality first, then the usage limit. The budget is a Claude Max subscription, no
 
 - Every call re-sends the whole context: a session costs about context size × calls; the lead's context is the dearest.
 - A fresh subagent's startup (system prompt, tools, CLAUDE.md, brief) is ~4–12k tokens for the lean agents below, ~50k+ for `general-purpose`, `Explore` or `Plan`. A fork copies the lead's whole conversation.
-- Output (thinking included) costs 5× input per token; 55–75% of a lead's output is hidden thinking. Measured 2026-10-13: 1% of the weekly allowance ≈ $19–25 of Opus/Sonnet work but ≈ $7–12 of Fable work. A Fable lead plans and reviews; bulk reading and bulk writing are not its job.
-- Delegation is not free: in EDMS stages 5–8 the workers cost what the lead saved. It pays only when workers stay short and the lead small. Numbers: `references/costs.md`.
+- Output (thinking included) costs 5× input per token, and thinking stays in the context: 56% of a Sonnet `max` coder's context growth (2026-10-20). 1% of the weekly allowance ≈ $27 of Opus/Sonnet work (2026-10-20) and ≈ $9–15 of Fable work (10-13). A Fable lead plans and reviews; bulk reading and bulk writing are not its job.
+- Delegation pays only when workers stay short and the lead small (EDMS 5–8: the workers cost what the lead saved). Numbers: `references/costs.md`.
 
 ## Who does what
 
@@ -34,8 +34,8 @@ Quality first, then the usage limit. The budget is a Claude Max subscription, no
 ## Splitting
 
 - Independent units, each with its own acceptance check (backend vs frontend, separate screens, groups of articles). Keep together what must stay consistent: all languages of a text, a component and its tests.
-- Not below ~20–30k tokens of real work per worker (startup and your review dominate), not above ≈ 100 calls or a ~4k-character brief. A worker that reaches its turn cap stops and reports what it has: split the unit and respawn with a fresh brief.
-- Parallel workers never touch the same files; two coders in one checkout also share build caches, dev servers and the git index, so spawn them with `isolation: "worktree"` (it branches from your HEAD: commit first) and merge each result yourself. Dependent steps run in sequence, the earlier result in the next brief.
+- Not below ~20–30k tokens of real work per worker (startup and your review dominate), not above ≈ 60 calls or a ~4k-character brief: a coder's context is ~200k at call 50 and ~340k at call 100, so calls 51–100 cost ~2.5× calls 1–50 (2026-10-20). A worker that reaches its turn cap stops and reports what it has: split the unit and respawn with a fresh brief.
+- Parallel workers never touch the same files; two coders in one checkout also share build caches, dev servers and the git index, so spawn them with `isolation: "worktree"` (it branches from your HEAD: commit first) and merge each result yourself. Worktrees still share ports, Docker and CPU: give each worker its own ports, start only the services its tests need, run related tests while iterating and full suites once at the end. Dependent steps run in sequence, the earlier result in the next brief.
 - Shared code that workers build on (a shell component, a composable) must lint, test and compile before you spawn them.
 - Name shared conventions in every parallel brief: display formats (name order, dates, numbers), i18n keys, naming.
 
@@ -68,6 +68,6 @@ Hand over the facts you have (line numbers, names, glossary); give paths and ran
 ## Enforcement and measurement
 
 - A prompt rule is a request, not a guardrail: `references/enforcement.md` has the deny list and the hooks; the agents have tool allowlists and turn caps.
-- Hooks log every substantial session to `~/.claude/delegate-metrics.tsv`, show each subagent's cost right after its hand-back (`delegate-cost:` lines) and take the weekly % from your `get_usage` calls; `scripts/agent_cost.py --table [project]` compares the stages, `agent_cost.py <session.jsonl> [--reports]` details one.
+- Hooks log every substantial session to `~/.claude/delegate-metrics.tsv` and show each subagent's cost after its hand-back; `scripts/agent_cost.py --table [project]` compares stages, `agent_cost.py <session.jsonl> [--reports]` details one.
 - Read the plan limits at the start and the end of a stage (desktop: `get_usage` tool; terminal: `/usage`); put the weekly all-models % in the handoff note. When the allowance is low, run Sonnet-only work and keep the lead for review.
-- After a stage, the user runs `/delegate-retro`: it measures, reviews quality, logs a lesson in `references/lessons.md` and proposes edits to this skill and the agents.
+- After a stage the user runs `/delegate-retro`: measurement, quality review, a lesson in `references/lessons.md`, proposed edits.

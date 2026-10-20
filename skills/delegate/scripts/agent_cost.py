@@ -44,6 +44,11 @@ import time
 from collections import defaultdict
 
 CHARS_PER_TOKEN = 3.3  # rough average for code mixed with Uzbek/Russian text; used only for estimates
+# A background subagent's transcript keeps only the streaming start of each call's usage (stop_reason null, output_tokens
+# 1-30), so its output, mostly thinking that stays in the context, went uncounted (2026-10-20: 155 of 216 subagents since
+# 10-14). That output reappears as the next call's context growth, beside the tool results and user text in between; at
+# RESULT_CHARS_PER_TOKEN for those, the estimate matched the true output of 37 transcripts that keep the final usage.
+RESULT_CHARS_PER_TOKEN = 2.1
 
 # Anthropic API list prices, 2026-10-06; cache_write is the 5-minute write (1.25x input), a 1-hour write costs WRITE_1H x input
 # $ per million tokens: (input, cache_write, cache_read, output). Key = substring of the model id; the longest matching key wins.
@@ -114,11 +119,14 @@ def cost(u, model):
 
 def analyze(path, skip=frozenset()):
     """The lead's (or a subagent's) numbers; calls whose message id is in `skip` (copied from an older transcript, see
-    copied_ids) are left out of calls, context and $, and counted in copied/copied_usd instead."""
+    copied_ids) are left out of calls, context and $, and counted in copied/copied_usd instead. A call's usage is taken from
+    its final row; a call that has only streamed rows gets its output estimated (see RESULT_CHARS_PER_TOKEN)."""
     rows = load(path)
     seen, calls, model = set(), [], None
     copied = []  # (usage, model) of the calls left out
     call_models = []  # message.model of each counted call, parallel to calls
+    index = {}  # message id -> position in calls
+    streamed, shown, between = [], [], []  # per call: no final row yet; its text and tool-input chars; user chars after it
     uses, sizes, order, issued = {}, {}, [], {}
     failed = set()  # tool_use ids whose result is an error; a failed Agent call (unknown agent type, denied) has no transcript
     readings, usage_ids = [], set()  # weekly all-models % from each get_usage tool result, in order
@@ -133,28 +141,53 @@ def analyze(path, skip=frozenset()):
                 continue
             if m.get("id") not in seen and m.get("usage"):
                 seen.add(m.get("id"))
+                index[m.get("id")] = len(calls)
                 calls.append(m["usage"])
                 call_models.append(m.get("model"))
+                streamed.append(True)
+                shown.append(0)
+                between.append(0)
+            i = index.get(m.get("id"))
+            if i is not None and (m.get("stop_reason") or "stop_reason" not in m):  # a final row (rows without the key: trusted)
+                calls[i] = m.get("usage") or calls[i]
+                streamed[i] = False
             for c in m.get("content") or []:
+                if i is not None and c.get("type") == "text":
+                    shown[i] += len(c.get("text", ""))
+                elif i is not None and c.get("type") == "tool_use":
+                    shown[i] += len(json.dumps(c.get("input")))
                 if c.get("type") == "tool_use":
                     uses[c["id"]] = (c["name"], describe(c["name"], c.get("input")), json.dumps(c.get("input"), sort_keys=True))
                     issued[c["id"]] = len(calls) - 1
                     order.append(c["id"])
                     if c["name"].endswith("get_usage"):
                         usage_ids.add(c["id"])
+        elif r.get("type") == "user" and isinstance(m.get("content"), str) and calls:
+            between[-1] += len(m["content"])
         elif r.get("type") == "user" and isinstance(m.get("content"), list):
             for c in m["content"]:
+                if c.get("type") == "text" and calls:
+                    between[-1] += len(c.get("text", ""))
                 if c.get("type") == "tool_result":
                     if c.get("is_error"):
                         failed.add(c["tool_use_id"])
                     cc = c.get("content")
                     sizes[c["tool_use_id"]] = (sum(len(x.get("text", "")) for x in cc if isinstance(x, dict))
                                                if isinstance(cc, list) else len(str(cc or "")))
+                    if calls:
+                        between[-1] += sizes[c["tool_use_id"]]
                     if c["tool_use_id"] in usage_ids and weekly_pct(cc) is not None:
                         readings.append(weekly_pct(cc))
 
     def ctx(u):
         return u.get("input_tokens", 0) + u.get("cache_creation_input_tokens", 0) + u.get("cache_read_input_tokens", 0)
+
+    for i, u in enumerate(calls):
+        if streamed[i]:  # the next call's context holds this call's output and the user content in between
+            out = max(u.get("output_tokens", 0), shown[i] / CHARS_PER_TOKEN)
+            if i + 1 < len(calls):
+                out = max(out, ctx(calls[i + 1]) - ctx(u) - between[i] / RESULT_CHARS_PER_TOKEN)
+            calls[i] = dict(u, output_tokens=round(out))
 
     by_tool = defaultdict(lambda: [0, 0])
     repeats = defaultdict(list)
@@ -173,6 +206,7 @@ def analyze(path, skip=frozenset()):
         "cache_read": sum(u.get("cache_read_input_tokens", 0) for u in calls),
         "cache_write": sum(u.get("cache_creation_input_tokens", 0) for u in calls),
         "output": sum(u.get("output_tokens", 0) for u in calls),
+        "estimated": sum(streamed),  # calls whose output is estimated
         "usd": sum(cost(u, cm or model or "?") for u, cm in zip(calls, call_models)),
         "copied": len(copied),
         "copied_usd": sum(cost(u, cm) for u, cm in copied),
@@ -678,6 +712,10 @@ def main():
         if atype == "general-purpose" and a["startup"] > 40000:
             hints.append("'%s' ran as general-purpose (startup %s): a lean agent with a tools allowlist starts at ~5k + CLAUDE.md."
                          % (meta.get("description", "?"), k(a["startup"])))
+    estimated = lead["estimated"] + sum(a["estimated"] for _, a in subs_info)
+    if estimated:
+        print("note: the output of %d calls is estimated from the next call's context growth (a background subagent's "
+              "transcript keeps only the streaming usage; within ~10%% on transcripts that keep both)" % estimated)
     if lead["agent_calls"] > len(subs):
         print("warning: the lead spawned %d agents but %d subagent transcripts were found under %s; "
               "either the session was resumed under a new id (earlier agents sit under the original id) or the transcript layout "
