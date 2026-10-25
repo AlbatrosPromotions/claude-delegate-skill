@@ -5,7 +5,7 @@ description: Split a task across subagents without losing quality — which agen
 
 # Delegate: route work to the right subagent
 
-Quality first, then the usage limit. The budget is a Claude Max subscription, not API dollars: the limit is consumed roughly in proportion to API prices, so a lead-model token (Opus/Fable) costs several Sonnet tokens and a Haiku token almost nothing. Delegate only when the result will be at least as good as doing it yourself, and never accept it unverified.
+Quality first; then waste neither the user's time nor the usage limit. The budget is a Claude Max subscription, not API dollars: the limit is consumed roughly in proportion to API prices, so a lead-model token (Opus/Fable) costs several Sonnet tokens and a Haiku token almost nothing. Delegate only when the result will be at least as good as doing it yourself, and never accept it unverified.
 
 ## What consumes the limit
 
@@ -39,6 +39,13 @@ Quality first, then the usage limit. The budget is a Claude Max subscription, no
 - Shared code that workers build on (a shell component, a composable) must lint, test and compile before you spawn them.
 - Name shared conventions in every parallel brief: display formats (name order, dates, numbers), i18n keys, naming.
 
+## Time (the user's time; never bought with a skipped check)
+
+- Put a decision only the user can make (approval, open questions) to them as soon as it exists, not in the wrap-up: they answer while workers run (2026-10-25: asked 2 h late, answered in 64 s, cost an extra PR).
+- Workers build and verify at the smallest scale that proves the change. Runs the lead repeats anyway (full-scale data, the CI gate) and anything over a few minutes are the lead's, with `run_in_background`, while it does the next independent step.
+- Start the gate (CI, review) on the final tree and change nothing while it runs; run the seconds-long checks first. One fix commit per review round; a round with only minor findings goes to the next change.
+- A hand-back saying "waiting on its own background work" means the worker left processes running: find them by its own paths (`pgrep -fl <its scratchpad or log>`), not a guessed pattern, and stop them before accepting.
+
 ## The brief (the worker knows only what you write down)
 
 1. **Goal**: one sentence stating the outcome.
@@ -68,6 +75,6 @@ Hand over the facts you have (line numbers, names, glossary); give paths and ran
 ## Enforcement and measurement
 
 - A prompt rule is a request, not a guardrail: `references/enforcement.md` has the deny list and the hooks; the agents have tool allowlists and turn caps.
-- Hooks log every substantial session to `~/.claude/delegate-metrics.tsv` and show each subagent's cost after its hand-back; `scripts/agent_cost.py --table [project]` compares stages, `agent_cost.py <session.jsonl> [--reports]` details one.
+- Hooks log every substantial session to `~/.claude/delegate-metrics.tsv` and show each subagent's cost after its hand-back; `scripts/agent_cost.py` reads them.
 - Read the plan limits at the start and the end of a stage (desktop: `get_usage` tool; terminal: `/usage`); put the weekly all-models % in the handoff note. When the allowance is low, run Sonnet-only work and keep the lead for review.
 - After a stage the user runs `/delegate-retro`: measurement, quality review, a lesson in `references/lessons.md`, proposed edits.

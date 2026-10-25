@@ -22,6 +22,7 @@ Reading
 Editing
 - Keep edits minimal and natural; keep the text's structure. Every language must say the same thing, in that language's existing wording.
 - Handle all language versions of one unit (article, key, section) together so they stay consistent. Use the brief's glossary; where it is silent, grep how that language already names the thing and reuse it exactly.
+- A size target is an aim: if the scope needs more, finish, then report the size and why. Revise with Edit; do not rewrite the whole file to cut it.
 - For many replacements, write one short script of exact (file, old, new) triples that fails loudly when an old string is not found exactly once. Delete the script afterwards.
 
 Verification (mandatory before you report)
