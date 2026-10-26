@@ -5,14 +5,12 @@ description: Split a task across subagents without losing quality — which agen
 
 # Delegate: route work to the right subagent
 
-Quality first; then waste neither the user's time nor the usage limit. The budget is a Claude Max subscription, not API dollars: the limit is consumed roughly in proportion to API prices, so a lead-model token (Opus/Fable) costs several Sonnet tokens and a Haiku token almost nothing. Delegate only when the result will be at least as good as doing it yourself, and never accept it unverified.
+Quality first; then waste neither the user's time nor the usage limit, a Claude Max subscription consumed roughly in proportion to API prices (an Opus/Fable token costs several Sonnet tokens, a Haiku token almost nothing). Delegate only when the result will be at least as good as your own, and never accept it unverified.
 
 ## What consumes the limit
 
-- Every call re-sends the whole context: a session costs about context size × calls; the lead's context is the dearest.
-- A fresh subagent's startup (system prompt, tools, CLAUDE.md, brief) is ~4–12k tokens for the lean agents below, ~50k+ for `general-purpose`, `Explore` or `Plan`. A fork copies the lead's whole conversation.
-- Output (thinking included) costs 5× input per token, and thinking stays in the context: 56% of a Sonnet `max` coder's context growth (2026-10-20). 1% of the weekly allowance ≈ $27 of Opus/Sonnet work (2026-10-20) and ≈ $9–15 of Fable work (10-13). A Fable lead plans and reviews; bulk reading and bulk writing are not its job.
-- Delegation pays only when workers stay short and the lead small (EDMS 5–8: the workers cost what the lead saved). Numbers: `references/costs.md`.
+- Every call re-sends the whole context (a session ≈ context × calls; the lead's context is the dearest); output costs 5× input and thinking stays in the context. A lean subagent starts at ~4–12k tokens, `general-purpose`/`Explore`/`Plan` at ~50k+, a fork at the lead's whole conversation.
+- 1% of the weekly allowance ≈ $28 of Opus/Sonnet work (2026-10-26; $27 on 10-20) and ≈ $9–15 of Fable work (10-13). A Fable lead plans and reviews; bulk reading and writing are not its job. Delegation pays only when workers stay short and the lead small: `references/costs.md`.
 
 ## Who does what
 
@@ -34,8 +32,8 @@ Quality first; then waste neither the user's time nor the usage limit. The budge
 ## Splitting
 
 - Independent units, each with its own acceptance check (backend vs frontend, separate screens, groups of articles). Keep together what must stay consistent: all languages of a text, a component and its tests.
-- Not below ~20–30k tokens of real work per worker (startup and your review dominate), not above ≈ 60 calls or a ~4k-character brief: a coder's context is ~200k at call 50 and ~340k at call 100, so calls 51–100 cost ~2.5× calls 1–50 (2026-10-20). A worker that reaches its turn cap stops and reports what it has: split the unit and respawn with a fresh brief.
-- Parallel workers never touch the same files; two coders in one checkout also share build caches, dev servers and the git index, so spawn them with `isolation: "worktree"` (it branches from your HEAD: commit first) and merge each result yourself. Worktrees still share ports, Docker and CPU: give each worker its own ports, start only the services its tests need, run related tests while iterating and full suites once at the end. Dependent steps run in sequence, the earlier result in the next brief.
+- Not below ~20–30k tokens of real work per worker (startup and your review dominate), not above ≈ 60 calls or a ~4k-character brief: a coder's context is ~200k at call 50 and ~340k at call 100, so calls 51–100 cost ~2.5× calls 1–50 (2026-10-20). A worker that reaches its turn cap stops and reports what it has: split the unit and respawn with a fresh brief. One item per spawn when each needs its own build-and-look cycle of minutes (a character, a garment, a screen): 3–7-item briefs hit the cap with items undone six times (10-25/26) and were respawned anyway.
+- Parallel workers never touch the same files; two coders in one checkout also share build caches, dev servers and the git index, so spawn them with `isolation: "worktree"` (it branches from your HEAD: commit first) and merge each result yourself. Worktrees still share ports, Docker and CPU: give each worker its own ports, start only the services its tests need, run related tests while iterating and full suites once at the end. Dependent steps run in sequence, the earlier result in the next brief. Units that all edit one file (a generator, a service provider, the changelog) are not independent: split the file or run them in sequence (10-25/26: one generator in 15 parallel workers, three `--ff-only` merges failed). Give each worker its own scratchpad subdirectory (three overwrote one `build.sh`).
 - Shared code that workers build on (a shell component, a composable) must lint, test and compile before you spawn them.
 - Name shared conventions in every parallel brief: display formats (name order, dates, numbers), i18n keys, naming.
 
@@ -62,19 +60,18 @@ Hand over the facts you have (line numbers, names, glossary); give paths and ran
 - Run the deterministic checks, or require them in the brief: tests, lint, `scripts/i18n_parity.py`.
 - Review changed lines, not whole files: `git diff --stat`, then `git diff -U1 -- <paths>`; after a tester, `git status` must show no product file changed. For translations run `scripts/i18n_diff.py <root>` and read every language; `(no change)` in one language is a red flag.
 - When a decision depends on a scout's claim, open one or two of the cited lines.
+- Diff the checks too: a threshold, expected value, skip or disabled assertion changed in a test or check is a finding unless the brief asked for it (three workers loosened a limit to pass, 10-25/26).
 - "Not verified" or "didn't read back" is not done: send it back once with a precise list (SendMessage keeps the worker's context); if the second attempt fails too, fix it yourself or respawn with a corrected brief, never a third round.
 
 ## Keep your own context small
 
 - Read the plan once; if it is long, only the current stage's section. grep first, then read the range. Never re-read an unchanged file.
 - Fewer calls: batch independent shell commands into one Bash call, make independent tool calls in parallel, never spend a call just to look.
-- Subagents notify you when they finish: no `sleep`, no polling. Filter long output (`| tail -n 40`, `| grep -E 'error|fail'`).
+- Subagents notify you when they finish: no `sleep`, no polling. Filter long output (`| tail -n 40`, `| grep -E 'error|fail'`), but a pipe returns tail's exit code, so run a gate as `cmd > log 2>&1; echo exit=$?; tail -n 40 log`, never `gate | tail && merge` (10-26: a PR merged on a failed check).
 - Push bulk reading (design references, long docs, many files) to a scout, or into the coder's brief as paths.
 - One stage per session. At a natural boundary, or once your context is large (~200k+), write a handoff note (done, next, decisions, open questions, usage % before/after) and continue in a fresh session.
 
 ## Enforcement and measurement
 
-- A prompt rule is a request, not a guardrail: `references/enforcement.md` has the deny list and the hooks; the agents have tool allowlists and turn caps.
-- Hooks log every substantial session to `~/.claude/delegate-metrics.tsv` and show each subagent's cost after its hand-back; `scripts/agent_cost.py` reads them.
-- Read the plan limits at the start and the end of a stage (desktop: `get_usage` tool; terminal: `/usage`); put the weekly all-models % in the handoff note. When the allowance is low, run Sonnet-only work and keep the lead for review.
-- After a stage the user runs `/delegate-retro`: measurement, quality review, a lesson in `references/lessons.md`, proposed edits.
+- A prompt rule is a request, not a guardrail: `references/enforcement.md` has the deny list and the hooks; the agents have tool allowlists and turn caps. Hooks log every substantial session to `~/.claude/delegate-metrics.tsv` and print each subagent's cost after its hand-back.
+- Read the plan limits at the start and the end of a stage (desktop: `get_usage`; terminal: `/usage`) and put the weekly all-models % in the handoff note; when the allowance is low, run Sonnet-only work and keep the lead for review. After a stage the user runs `/delegate-retro`.
