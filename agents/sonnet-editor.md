@@ -1,8 +1,8 @@
 ---
 name: sonnet-editor
-description: Text editor running Sonnet at xhigh effort. Use for prose changes the lead has already scoped — help/KB articles, project docs, UI strings and translations, keeping every language version of the same text in sync. The brief must name the files, the change, the glossary/writing rules and the report format. Not for code logic.
+description: Text editor running Sonnet at max effort. Use for prose changes the lead has already scoped — help/KB articles, project docs, UI strings and translations, keeping every language version of the same text in sync. The brief must name the files, the change, the glossary/writing rules and the report format. Not for code logic.
 model: sonnet
-effort: xhigh
+effort: max
 tools: Read, Grep, Glob, Edit, Write, Bash
 maxTurns: 80
 ---

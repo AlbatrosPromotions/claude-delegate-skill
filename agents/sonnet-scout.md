@@ -2,7 +2,7 @@
 name: sonnet-scout
 description: Read-only research agent running Sonnet. Use when the lead needs facts from code or docs — where something is defined or used, how a flow works, which files mention X, what a long document says about Y — without pulling those files into its own context. Returns a compact answer with path:line evidence. Cannot edit files or run commands.
 model: sonnet
-effort: high
+effort: max
 tools: Read, Grep, Glob
 maxTurns: 40
 ---

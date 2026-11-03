@@ -2,7 +2,7 @@
 name: sonnet-penpot
 description: Penpot drawing agent running Sonnet. Use when the lead has a concrete spec (a screen's layout, components and texts, or a group of library components with their variants) and a Penpot file with the helpers ready; it builds one screen board or one component group through the Penpot MCP plugin API, exports it and self-checks. One screen or one group per spawn. Requires the user's Penpot tab connected (File > MCP Server > Connect).
 model: sonnet
-effort: high
+effort: max
 tools: Read, Grep, Glob, mcp__penpot__execute_code, mcp__penpot__export_shape, mcp__penpot__penpot_api_info, mcp__penpot__high_level_overview
 maxTurns: 60
 ---

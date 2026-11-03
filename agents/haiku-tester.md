@@ -2,6 +2,7 @@
 name: haiku-tester
 description: QA agent running Haiku. Use to test a finished change against an acceptance checklist — runs the project's automated tests and scripted checks and reports PASS/FAIL with evidence. Does not fix product code. Pilot it on one unit before relying on it for a new kind of check.
 model: haiku
+effort: max
 tools: Read, Grep, Glob, Edit, Write, Bash
 maxTurns: 60
 ---
