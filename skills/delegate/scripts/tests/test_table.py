@@ -27,6 +27,12 @@ class StageTableTest(unittest.TestCase):
         self.assertIn("61.10", lines[2]); self.assertIn("+41%", lines[2])  # 61.10 vs 43.20
         self.assertIn("0.196", lines[2]); self.assertIn("40->52", lines[2])  # (52-40)/61.10 %/$
 
+    def test_a_weekly_reset_inside_a_session_leaves_the_rate_blank(self):
+        line = agent_cost.stage_table([dict(ROWS[1], usage_before="92", usage_after="0")]).splitlines()[1]
+        self.assertIn("92->0", line); self.assertNotIn("-1.51", line)  # (0-92)/61.10 is not a rate
+        line = agent_cost.stage_table([dict(ROWS[1], usage_before="4", usage_after="4")]).splitlines()[1]
+        self.assertIn("  0  4->4", line)  # no change is still a reading
+
     def test_without_project_every_row_is_shown(self):
         self.assertEqual(len(agent_cost.stage_table(ROWS).splitlines()), 4)
         self.assertIn("no logged sessions for project nope", agent_cost.stage_table(ROWS, "nope"))

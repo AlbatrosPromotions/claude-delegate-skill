@@ -388,9 +388,11 @@ def read_meta(transcript):
 
 
 def subagent_files(session):
-    """The subagent transcripts of a session .jsonl (<session>/subagents/agent-*.jsonl), oldest first."""
-    sub_dir = os.path.join(session[:-len(".jsonl")], "subagents")
-    return sorted(glob.glob(os.path.join(glob.escape(sub_dir), "agent-*.jsonl")), key=os.path.getmtime)
+    """The subagent transcripts of a session .jsonl (<session>/subagents/agent-*.jsonl, and a Workflow run's under
+    <session>/subagents/workflows/<run>/), oldest first."""
+    sub_dir = glob.escape(os.path.join(session[:-len(".jsonl")], "subagents"))
+    paths = glob.glob(os.path.join(sub_dir, "agent-*.jsonl")) + glob.glob(os.path.join(sub_dir, "workflows", "*", "agent-*.jsonl"))
+    return sorted(paths, key=os.path.getmtime)
 
 
 def find_subagent(session_jsonl, tool_use_id=None, agent_id=None):
@@ -498,7 +500,8 @@ def stage_table(rows, project=None):
         change = "%+.0f%%" % ((total - prev) / prev * 100) if prev and total else ""
         before, after = r.get("usage_before", ""), r.get("usage_after", "")
         try:
-            rate = "%.3g" % ((float(after) - float(before)) / total) if before and after and total else ""
+            used = float(after) - float(before) if before and after else -1  # below 0: the weekly reset came in between
+            rate = "%.3g" % (used / total) if used >= 0 and total else ""
         except (ValueError, ZeroDivisionError):
             rate = ""
         usage = "%s->%s" % (before, after) if before or after else ""

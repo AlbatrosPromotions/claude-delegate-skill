@@ -10,7 +10,7 @@ Quality first; then waste neither the user's time nor the usage limit, a Claude 
 ## What consumes the limit
 
 - Every call re-sends the whole context (a session ≈ context × calls; the lead's context is the dearest); output costs 5× input and thinking stays in the context. A lean subagent starts at ~4–12k tokens, `general-purpose`/`Explore`/`Plan` at ~50k+, a fork at the lead's whole conversation.
-- 1% of the weekly allowance ≈ $28 of Opus/Sonnet work (2026-10-26; $27 on 10-20) and ≈ $9–15 of Fable work (10-13). A Fable lead plans and reviews; bulk reading and writing are not its job. Delegation pays only when workers stay short and the lead small: `references/costs.md`.
+- 1% of the weekly allowance ≈ $28 of Opus/Sonnet work (2026-11-03) and ≈ $9–15 of Fable work (10-13). A Fable lead plans and reviews; bulk reading and writing are not its job. Delegation pays only when workers stay short and the lead small: `references/costs.md`.
 
 ## Who does what
 
@@ -22,7 +22,8 @@ Quality first; then waste neither the user's time nor the usage limit, a Claude 
 | Code changes from a concrete plan | `sonnet-coder` | the plan names files, behaviour, edge cases, checks; 120-turn cap |
 | Docs, KB/help articles, UI strings, translations | `sonnet-editor` | one worker per unit, all languages of a unit together; 80-turn cap |
 | A Penpot screen from a spec and a ready component library | `sonnet-penpot` | one screen per spawn; 60-turn cap |
-| Acceptance checks, scripted UI checks | `haiku-tester` | checklist in, PASS/FAIL with evidence out; pilot it on one unit first |
+| Acceptance checks, scripted UI checks | `haiku-tester` | checklist in, PASS/FAIL with evidence out |
+| Independent review of a diff | `opus-reviewer` | read-only, runs tests; gets only the PR or diff range, never the writer's reasoning |
 | Anything a script can decide: parity, lint, types, tests, greps | a script | deterministic and free |
 | `general-purpose`, `Explore`, `Plan`, fork | avoid | 50k+ startup for tools the work never touches; for a tool set no lean agent has, write a lean agent in `~/.claude/agents/`; fork only from a small context (<~50k) |
 
@@ -32,17 +33,18 @@ Quality first; then waste neither the user's time nor the usage limit, a Claude 
 ## Splitting
 
 - Independent units, each with its own acceptance check (backend vs frontend, separate screens, groups of articles). Keep together what must stay consistent: all languages of a text, a component and its tests.
-- Not below ~20–30k tokens of real work per worker (startup and your review dominate), not above ≈ 60 calls or a ~4k-character brief: a coder's context is ~200k at call 50 and ~340k at call 100, so calls 51–100 cost ~2.5× calls 1–50 (2026-10-20). A worker that reaches its turn cap stops and reports what it has: split the unit and respawn with a fresh brief. One item per spawn when each needs its own build-and-look cycle of minutes (a character, a garment, a screen): 3–7-item briefs hit the cap with items undone six times (10-25/26) and were respawned anyway.
-- Parallel workers never touch the same files; two coders in one checkout also share build caches, dev servers and the git index, so spawn them with `isolation: "worktree"` (it branches from your HEAD: commit first) and merge each result yourself. Worktrees still share ports, Docker and CPU: give each worker its own ports, start only the services its tests need, run related tests while iterating and full suites once at the end. Dependent steps run in sequence, the earlier result in the next brief. Units that all edit one file (a generator, a service provider, the changelog) are not independent: split the file or run them in sequence (10-25/26: one generator in 15 parallel workers, three `--ff-only` merges failed). Give each worker its own scratchpad subdirectory (three overwrote one `build.sh`).
+- Not below ~20–30k tokens of real work per worker, not above ≈ 60 calls or a ~4k-character brief: a coder's context is ~200k at call 50 and ~340k at call 100, so calls 51–100 cost ~2.5× calls 1–50 (2026-10-20). A worker that reaches its turn cap stops and reports what it has: split the unit and respawn with a fresh brief. One item per spawn when each needs its own build-and-look cycle of minutes (a character, a garment, a screen): 3–7-item briefs hit the cap with items undone (six on 10-25/26).
+- Parallel workers never touch the same files; two coders in one checkout also share build caches, dev servers and the git index, so spawn them with `isolation: "worktree"` (it branches from your HEAD: commit first) and merge each result yourself. Worktrees still share ports, Docker and CPU: give each worker its own ports, start only the services its tests need, run related tests while iterating and full suites once at the end. Dependent steps run in sequence, the earlier result in the next brief. Units that all edit one file (a generator, a service provider, the changelog) are not independent: split the file or run them in sequence (10-25/26: 15 workers on one generator). Give each worker its own scratchpad subdirectory.
 - Shared code that workers build on (a shell component, a composable) must lint, test and compile before you spawn them.
 - Name shared conventions in every parallel brief: display formats (name order, dates, numbers), i18n keys, naming.
 
 ## Time (the user's time; never bought with a skipped check)
 
-- Put a decision only the user can make (approval, open questions) to them as soon as it exists, not in the wrap-up: they answer while workers run (2026-10-25: asked 2 h late, answered in 64 s, cost an extra PR).
+- Put a decision only the user can make (approval, open questions) to them as soon as it exists, not in the wrap-up: they answer while workers run (10-25: asked 2 h late, answered in 64 s).
 - Workers build and verify at the smallest scale that proves the change. Runs the lead repeats anyway (full-scale data, the CI gate) and anything over a few minutes are the lead's, with `run_in_background`, while it does the next independent step.
 - Start the gate (CI, review) on the final tree and change nothing while it runs; run the seconds-long checks first. One fix commit per review round; a round with only minor findings goes to the next change.
 - A hand-back saying "waiting on its own background work" means the worker left processes running: find them by its own paths (`pgrep -fl <its scratchpad or log>`), not a guessed pattern, and stop them before accepting.
+- After starting a background run, check once within a minute that it progresses (a log line, live workers): the notification comes only when it ends, and a stuck run never ends (11-03: 91 min lost until the user asked).
 
 ## The brief (the worker knows only what you write down)
 
@@ -60,8 +62,9 @@ Hand over the facts you have (line numbers, names, glossary); give paths and ran
 - Run the deterministic checks, or require them in the brief: tests, lint, `scripts/i18n_parity.py`.
 - Review changed lines, not whole files: `git diff --stat`, then `git diff -U1 -- <paths>`; after a tester, `git status` must show no product file changed. For translations run `scripts/i18n_diff.py <root>` and read every language; `(no change)` in one language is a red flag.
 - When a decision depends on a scout's claim, open one or two of the cited lines.
-- Diff the checks too: a threshold, expected value, skip or disabled assertion changed in a test or check is a finding unless the brief asked for it (three workers loosened a limit to pass, 10-25/26).
+- Diff the checks too: a threshold, expected value, skip or disabled assertion changed in a test or check is a finding unless the brief asked for it (three workers did, 10-25/26).
 - "Not verified" or "didn't read back" is not done: send it back once with a precise list (SendMessage keeps the worker's context); if the second attempt fails too, fix it yourself or respawn with a corrected brief, never a third round.
+- A new spawn on the same defect is a round too. After two workers fail it, stop spawning: check that the measurement is what the user sees (the final engine, not a proxy), then change the approach or give the user the decision with the $ spent (10-30: 13 spawns, $66 on one skirt; at the 7th, Blender's pose turned out 32–81 mm off Unity).
 
 ## Keep your own context small
 
@@ -73,5 +76,5 @@ Hand over the facts you have (line numbers, names, glossary); give paths and ran
 
 ## Enforcement and measurement
 
-- A prompt rule is a request, not a guardrail: `references/enforcement.md` has the deny list and the hooks; the agents have tool allowlists and turn caps. Hooks log every substantial session to `~/.claude/delegate-metrics.tsv` and print each subagent's cost after its hand-back.
+- A prompt rule is a request, not a guardrail: `references/enforcement.md` has the deny list and the hooks; the agents have tool allowlists and turn caps. Hooks log every substantial session and print each subagent's cost after its hand-back.
 - Read the plan limits at the start and the end of a stage (desktop: `get_usage`; terminal: `/usage`) and put the weekly all-models % in the handoff note; when the allowance is low, run Sonnet-only work and keep the lead for review. After a stage the user runs `/delegate-retro`.

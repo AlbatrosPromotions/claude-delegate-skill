@@ -532,6 +532,12 @@ class SubagentHelpersTest(unittest.TestCase):
         self.assertEqual(agent_cost.find_subagent(self.session, tool_use_id="toolu_A", agent_id="bbb"), (self.meta, self.a))
         self.assertEqual(agent_cost.find_subagent(self.session, tool_use_id="toolu_unknown", agent_id="bbb"), ({}, self.b))
 
+    def test_a_workflow_runs_agents_are_counted_and_its_journal_is_not(self):
+        run = os.path.join(self.sub_dir, "workflows", "wf_1")
+        c = write(os.path.join(run, "agent-ccc.jsonl"), [assistant("m5", [], U1, HAIKU)])
+        write(os.path.join(run, "journal.jsonl"), [{"type": "phase"}])
+        self.assertEqual(sorted(agent_cost.subagent_files(self.session)), sorted([self.a, self.b, c]))
+
     def test_nothing_found(self):
         self.assertEqual(agent_cost.find_subagent(self.session, tool_use_id="toolu_unknown"), (None, None))
         self.assertEqual(agent_cost.find_subagent(self.session, agent_id="zzz"), (None, None))
