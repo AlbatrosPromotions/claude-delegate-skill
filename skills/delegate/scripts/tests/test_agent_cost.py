@@ -208,6 +208,32 @@ class ResolveTest(unittest.TestCase):
                 self.assertEqual(agent_cost.resolve(named, previous=True), named)
 
 
+class LiveSessionTest(unittest.TestCase):
+    def test_last_write_counts_the_subagents(self):
+        with tempfile.TemporaryDirectory() as d:
+            session = touch(os.path.join(d, "s1.jsonl"), 1000000)
+            self.assertEqual(agent_cost.last_write_age(session, now=1000300), 300)
+            touch(os.path.join(d, "s1", "subagents", "agent-a1.jsonl"), 1000200)
+            self.assertEqual(agent_cost.last_write_age(session, now=1000300), 100)
+
+    def test_cli_warns_only_while_a_transcript_is_fresh(self):
+        warning = "may still be running and these figures are partial"
+        with tempfile.TemporaryDirectory() as d:
+            session = write(os.path.join(d, "s1.jsonl"), lead_rows())
+            self.assertIn(warning, run_cli(session).stdout)
+            os.utime(session, (1000000, 1000000))
+            self.assertNotIn(warning, run_cli(session).stdout)
+
+
+class TableProjectTest(unittest.TestCase):
+    def test_name_or_project_directory(self):
+        home = os.path.expanduser("~").replace("/", "-")
+        self.assertEqual(agent_cost.table_project("VR-Sud"), "VR-Sud")
+        self.assertIsNone(agent_cost.table_project(""))
+        self.assertEqual(agent_cost.table_project("/x/projects/%s-Projects-EDMS/" % home), "EDMS")
+        self.assertEqual(agent_cost.table_project("/x/projects/%s-Projects-VR-Sud" % home), "VR-Sud")
+
+
 class CliTest(unittest.TestCase):
     def test_warns_when_the_lead_spawned_agents_but_no_transcripts_exist(self):
         with tempfile.TemporaryDirectory() as d:
@@ -222,6 +248,8 @@ class CliTest(unittest.TestCase):
             write(os.path.join(d, "s1", "custom-title.json"), [{"customTitle": "Stage 9: tests"}])
             write(os.path.join(d, "s1", "subagents", "agent-a1.jsonl"), [assistant("m1", [], U1, HAIKU)])
             write(os.path.join(d, "s1", "subagents", "agent-a1.meta.json"), [{"agentType": "sonnet-scout", "description": "scan"}])
+            for f in (session, os.path.join(d, "s1", "subagents", "agent-a1.jsonl")):
+                os.utime(f, (1000000, 1000000))  # a finished session: no "may still be running" warning
             p = run_cli(session)
         P = agent_cost.PRICES
         lead_usd, sub_usd = usd(P["sonnet-5"], U1, U2, U3), usd(P["haiku"], U1)

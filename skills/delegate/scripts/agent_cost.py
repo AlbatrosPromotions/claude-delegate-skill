@@ -369,6 +369,23 @@ def lead_followup(lead_rows, agent_id):
     return words, actions, sent_back
 
 
+LIVE_SECONDS = 300  # a transcript written this recently belongs to a session that may still be running
+
+
+def last_write_age(session, now=None):
+    """Seconds since the session or one of its subagents last wrote its transcript."""
+    files = [session] + glob.glob(os.path.join(session[:-len(".jsonl")], "subagents", "**", "*.jsonl"), recursive=True)
+    newest = max((os.path.getmtime(p) for p in files if os.path.exists(p)), default=0)
+    return (time.time() if now is None else now) - newest
+
+
+def table_project(arg):
+    """--table's PROJECT: a logged name such as VR-Sud, or a project directory under ~/.claude/projects."""
+    if arg and (os.sep in arg or os.path.isdir(os.path.expanduser(arg))):
+        return project_name(os.path.join(os.path.expanduser(arg.rstrip(os.sep)), "session.jsonl"))
+    return arg or None
+
+
 def project_name(session):
     name = os.path.basename(os.path.dirname(os.path.abspath(session)))
     home = os.path.expanduser("~").replace("/", "-")
@@ -650,7 +667,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("path", nargs="?", help="session .jsonl, session dir or project dir (not needed with --table)")
     ap.add_argument("--table", nargs="?", const="", metavar="PROJECT",
-                    help="print the comparison table of logged stages (optionally one project) and exit; the SessionEnd hook keeps the same table in delegate-report.txt")
+                    help="print the comparison table of logged stages (optionally one project, by name or project directory) and exit; the SessionEnd hook keeps the same table in delegate-report.txt")
     ap.add_argument("--previous", action="store_true",
                     help="for a project directory: the second-newest session (the newest is the one running the retro)")
     ap.add_argument("--top", type=int, default=5, help="costliest tool outputs to list per session (default 5)")
@@ -666,7 +683,7 @@ def main():
         logged = catch_up()
         if logged:
             print("caught up %d session(s) the SessionEnd hook had missed: %s\n" % (len(logged), " ".join(logged)))
-        print(stage_table(read_metrics(), args.table or None))
+        print(stage_table(read_metrics(), table_project(args.table)))
         return
     if not args.path:
         ap.error("path is required (or use --table)")
@@ -752,6 +769,10 @@ def main():
                      "in parallel; every call re-sends the whole context." % (lead["calls"], k(lead["avg_ctx"])))
     for h in hints:
         print("hint: " + h)
+    age = last_write_age(session)
+    if age < LIVE_SECONDS:
+        print("warning: this session or one of its subagents wrote its transcript %ds ago, so it may still be running and "
+              "these figures are partial; for a retro, take the newest finished stage" % age)
     if args.log:
         log_metrics(session, lead, subs_info, args.usage_before, args.usage_after)
 
